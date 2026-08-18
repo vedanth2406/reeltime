@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import __version__
-from .core import ids, paths
+from .core import fmt, ids, paths
 from .core.blobs import BlobStore
 from .core.trace import Event, Trace, read_trace
 from .errors import TapeError
@@ -150,13 +150,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     trace = read_trace(trace_file)
     footer = trace.footer or {}
     sys.stderr.write(
-        "\n{} recorded {} event{} → {}  ({:.1f}s, ${:.2f})\n".format(
+        "\n{} recorded {} event{} → {}  ({:.1f}s, {})\n".format(
             "✓" if completed.returncode == 0 else "✗",
             len(trace),
             "" if len(trace) == 1 else "s",
             paths.display_path(trace_file),
             footer.get("dur_s", 0.0),
-            footer.get("cost_usd", 0.0),
+            fmt.usd(footer.get("cost_usd")),
         )
     )
     redacted = footer.get("redacted") or {}
@@ -214,7 +214,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
             row["when"],
             row["events"],
             "{:.1f}s".format(row["dur_s"]) if row["dur_s"] is not None else "–",
-            "${:.2f}".format(row["cost_usd"]) if row["cost_usd"] is not None else "–",
+            fmt.usd(row["cost_usd"]),
             _truncate(row["argv"], 40) + ("" if row["complete"] else "  (incomplete)"),
         ))
     return 0

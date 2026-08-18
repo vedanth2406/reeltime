@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from ..errors import TapeConfigError, TapeStateError
-from . import ids, paths, spans
+from . import fmt, ids, paths, spans
 from .blobs import BlobStore
 from .config import Config
 from .decoders import decode as decode_event
@@ -58,12 +58,12 @@ class RunSummary:
     redacted: Dict[str, int] = field(default_factory=dict)
 
     def line(self) -> str:
-        return "recorded {} event{} → {}  ({:.1f}s, ${:.2f})".format(
+        return "recorded {} event{} → {}  ({:.1f}s, {})".format(
             self.events,
             "" if self.events == 1 else "s",
             paths.display_path(self.path),
             self.dur_s,
-            self.cost_usd,
+            fmt.usd(self.cost_usd),
         )
 
     def redaction_line(self) -> Optional[str]:

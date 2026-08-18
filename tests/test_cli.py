@@ -211,3 +211,24 @@ def test_bare_invocation_prints_help(capsys):
     assert run_cli() == 0
     out = capsys.readouterr().out
     assert "run" in out and "planned:" in out
+
+
+def test_sub_cent_costs_are_not_rounded_to_zero(recorded, tape_dir, capsys):
+    # A single call usually costs a fraction of a cent. Showing that as $0.00
+    # makes the one number a user might act on look like nothing.
+    run_cli("--tape-dir", str(tape_dir), "ls")
+    rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines()[1:]}
+    # A few millionths of a dollar: too small for four decimals, but not zero.
+    assert "<$0.0001" in rows["01AAAAA"]
+    assert "$0.00" in rows["01BBBBB"]     # genuinely zero, shown as zero
+
+
+@pytest.mark.parametrize(
+    "amount,shown",
+    [(None, "–"), (0, "$0.00"), (0.0000039, "<$0.0001"), (0.0031, "$0.0031"),
+     (0.31, "$0.31"), (12.5, "$12.50")],
+)
+def test_cost_formatting(amount, shown):
+    from reeltime.core import fmt
+
+    assert fmt.usd(amount) == shown
