@@ -84,6 +84,16 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
   where it is long, and diffs it between two calls so an injection or a
   truncation is impossible to miss. Most agent bugs are context bugs, and
   nothing else surfaces the exact bytes.
+- **Fork a run from any step, with the fix applied.** `tape fork <run> --at 13
+  --patch 'llm.system+="Ask first."'` replays the first 13 events — free and
+  identical — then goes live from there. Testing a prompt change costs one
+  step instead of a whole run, and the fork is itself a complete trace, so it
+  replays and forks again.
+- **`tape diff <a> <b>` finds where two runs stopped being the same run.** It
+  aligns them by event signature rather than by text, so the headline is the
+  divergence point and what each run did alone afterwards. For LLM steps it
+  reaches into the context, and a changed system prompt shows as the two lines
+  that changed.
 
 ## Install
 
@@ -501,9 +511,9 @@ which is the zero-edit claim made concrete.
 | 2 | httpx shim, provider decoders, `@tape.tool`, streaming, `run/ls/show` | ✅ |
 | 3 | Player, three-tier matcher, `TapeMiss`, `tape replay` | ✅ |
 | 4 | `--context`, `tape reindex`, examples, **v0.1.0** | ✅ |
-| 5 | `tape fork <run> --at N --patch …` | ✅ |
+| 5 | `tape fork <run> --at N --patch …`, **v0.2.0** | ✅ |
+| 6 | `tape diff`, divergence-point reporting, **v0.3.0** | ✅ |
 | 5.5 | MCP adapter | next |
-| 6 | `tape diff`, divergence-point reporting | ✅ |
 | 7 | `tape doctor` — find a run's nondeterminism sources | |
 | 8 | LangChain callback adapter | |
 | 9 | Overhead benchmarks, docs site | v1.0 |
@@ -519,8 +529,8 @@ changes an agent's behaviour invisibly.
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 488 tests
-pytest --cov --cov-report=term-missing  # core/ is at 93%
+pytest                                  # 489 tests
+pytest --cov --cov-report=term-missing  # core/ is at 94%
 python examples/m3_replay_speed.py      # the benchmark above
 ```
 

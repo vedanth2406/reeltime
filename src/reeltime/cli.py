@@ -27,7 +27,11 @@ from .core.reindex import reindex
 from .core.trace import Event, Trace, read_trace
 from .errors import TapeError
 
+#: Not yet built. Kept in step with the roadmap table in the README -- the two
+#: are the only places that promise anything, so they must not drift apart.
+#: Entries that are not subcommands say so in their name ("mcp adapter").
 PLANNED = (
+    ("mcp adapter", "record tools/list and tools/call as first-class events", "M5.5"),
     ("doctor", "find a run's nondeterminism sources", "M7"),
 )
 
