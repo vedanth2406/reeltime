@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "reeltime"
-version = "0.1.1"
+version = "0.2.0"
 description = "Deterministic record/replay debugger for LLM agents: replay a failed run offline, instantly, for free"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -45,6 +45,9 @@ dev = [
   "requests>=2.32",
   "openai>=1.66",
   "anthropic>=0.40",
+  # The ambient patcher supports numpy.random; without it here, its tests are
+  # skipped and the support rots unnoticed.
+  "numpy>=1.26",
 ]
 
 [project.urls]

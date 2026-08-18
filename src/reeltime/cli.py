@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -19,12 +21,13 @@ from typing import Any, Dict, List, Optional, Sequence
 from . import __version__
 from .core import context, fmt, ids, paths
 from .core.blobs import BlobStore
+from .core.fork import check_patches, missing_credentials
+from .core.patch import parse_all as parse_patches
 from .core.reindex import reindex
 from .core.trace import Event, Trace, read_trace
 from .errors import TapeError
 
 PLANNED = (
-    ("fork", "replay to step N, then run live", "M5"),
     ("diff", "align and compare two runs", "M6"),
     ("doctor", "find a run's nondeterminism sources", "M7"),
 )
@@ -246,6 +249,145 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return completed.returncode
 
 
+# -- tape fork -----------------------------------------------------------
+
+
+def _edit_event(trace: Trace, index: int, blobs: BlobStore) -> Optional[Dict[str, Any]]:
+    """Open $EDITOR on one event. Returns None when the edit is abandoned.
+
+    An empty buffer means "never mind", the way `git commit` reads one. Invalid
+    JSON is a mistake rather than a decision, so it is reported and nothing is
+    forked either way -- no run is created for an edit that did not land.
+    """
+    event = _event_at(trace, index)
+    original = blobs.resolve(event.to_dict())
+
+    editor = os.environ.get("REELTIME_EDITOR") or os.environ.get("EDITOR") or "vi"
+    handle, path = tempfile.mkstemp(prefix="reeltime-fork-", suffix=".json")
+    try:
+        with os.fdopen(handle, "w") as out:
+            json.dump(original, out, indent=2, ensure_ascii=False)
+            out.write("\n")
+
+        completed = subprocess.run(shlex.split(editor) + [path])
+        if completed.returncode != 0:
+            raise TapeError("{} exited {}; nothing was forked".format(
+                editor, completed.returncode))
+
+        with open(path) as source:
+            text = source.read()
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:  # pragma: no cover
+            pass
+
+    if not text.strip():
+        sys.stderr.write("empty buffer; nothing was forked\n")
+        return None
+    try:
+        edited = json.loads(text)
+    except ValueError as exc:
+        raise TapeError(
+            "the edited event is not valid JSON ({}), so nothing was forked. "
+            "Your edit was not saved anywhere -- run the command again.".format(exc)
+        )
+    if not isinstance(edited, dict):
+        raise TapeError("the edited event must be a JSON object; nothing was forked")
+    if edited == original:
+        sys.stderr.write("no changes; forking anyway\n")
+    return edited
+
+
+def cmd_fork(args: argparse.Namespace) -> int:
+    tape_dir = _tape_dir(args)
+    trace = read_trace(_resolve_run(tape_dir, args.run))
+
+    if args.at is None:
+        raise TapeError(
+            "fork needs a point: --at N replays events 0..N-1 and runs event N "
+            "live. `tape show {}` lists them.".format(_short(trace.run_id))
+        )
+    if not trace.header.argv:
+        raise TapeError(
+            "run {} did not record a command, so there is nothing to re-run".format(
+                _short(trace.run_id))
+        )
+
+    # Everything that can be known before spending a replay is checked here.
+    patches = parse_patches(args.patch or [])
+    check_patches(patches, trace, args.at)
+    missing = missing_credentials(trace, args.at)
+    if missing:
+        raise TapeError(
+            "this fork runs live from event {}, and those calls need:\n{}".format(
+                args.at,
+                "\n".join("  {}  (for {})".format(var, host) for host, var in missing))
+        )
+
+    override_path = None
+    if args.edit:
+        edited = _edit_event(trace, args.at, BlobStore(paths.blobs_dir(tape_dir)))
+        if edited is None:
+            return 1
+        handle, override_path = tempfile.mkstemp(prefix="reeltime-override-",
+                                                 suffix=".json")
+        with os.fdopen(handle, "w") as out:
+            json.dump(edited, out)
+
+    child = ids.new_run_id()
+    env = dict(os.environ)
+    env.update({
+        "REELTIME_AUTOINSTALL": "1",
+        "REELTIME_MODE": "fork",
+        "REELTIME_REPLAY": trace.run_id,
+        "REELTIME_RUN_ID": child,
+        "REELTIME_FORK_AT": str(args.at),
+        "REELTIME_FORK_PATCH": json.dumps([p.source for p in patches]),
+        "REELTIME_STRICTNESS": "loose" if args.loose else "default",
+        "TAPE_DIR": str(tape_dir),
+    })
+    if override_path:
+        env["REELTIME_FORK_OVERRIDE"] = override_path
+    bootstrap = str(Path(__file__).resolve().parent / "_bootstrap")
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = bootstrap + (os.pathsep + existing if existing else "")
+
+    command = _resolve_interpreter([sys.executable] + list(trace.header.argv))
+    cwd = trace.header.cwd if os.path.isdir(trace.header.cwd or "") else None
+
+    try:
+        completed = subprocess.run(command, env=env, cwd=cwd)
+    except FileNotFoundError:
+        sys.stderr.write("tape fork: cannot re-run {}\n".format(command[0]))
+        return 127
+    finally:
+        if override_path:
+            try:
+                os.unlink(override_path)
+            except OSError:  # pragma: no cover
+                pass
+
+    forked = paths.trace_path(tape_dir, child)
+    if not forked.exists():
+        sys.stderr.write("tape fork: nothing was recorded\n")
+        return completed.returncode or 1
+
+    result = read_trace(forked)
+    footer = result.footer or {}
+    replayed = sum(1 for e in result.events if e.meta.get("replayed_from"))
+    sys.stderr.write(
+        "\n{} forked → {}  ({} replayed, {} live, {})\n".format(
+            "✓" if completed.returncode == 0 else "✗", _short(child), replayed,
+            len(result.events) - replayed, fmt.usd(footer.get("cost_usd")))
+    )
+    sys.stderr.write("  parent {} · forked at event {}\n".format(
+        _short(trace.run_id), args.at))
+    for expression in (p.source for p in patches):
+        sys.stderr.write("  patched {}\n".format(expression))
+    return completed.returncode
+
+
 # -- tape reindex --------------------------------------------------------
 
 
@@ -280,6 +422,8 @@ def _row(tape_dir: Path, run_id: str) -> Optional[Dict[str, Any]]:
         "kinds": footer.get("kinds", {}),
         "complete": trace.complete,
         "argv": " ".join(trace.header.argv),
+        "forked_from": trace.header.forked_from,
+        "fork_at": trace.header.fork_at,
     }
 
 
@@ -298,13 +442,18 @@ def cmd_ls(args: argparse.Namespace) -> int:
     print("{:<15} {:<17} {:>7} {:>8} {:>8}  {}".format(
         "RUN", "WHEN", "EVENTS", "DUR", "COST", "COMMAND"))
     for row in rows:
+        note = "" if row["complete"] else "  (incomplete)"
+        if row["forked_from"]:
+            # Parentage on the row itself: a directory of forks is unreadable
+            # without it, and the tree is the point of forking.
+            note += "  ← {}@{}".format(_short(row["forked_from"]), row["fork_at"])
         print("{:<15} {:<17} {:>7} {:>8} {:>8}  {}".format(
             _short(row["run_id"]),
             row["when"],
             row["events"],
             "{:.1f}s".format(row["dur_s"]) if row["dur_s"] is not None else "–",
             fmt.usd(row["cost_usd"]),
-            _truncate(row["argv"], 40) + ("" if row["complete"] else "  (incomplete)"),
+            _truncate(row["argv"], 34) + note,
         ))
     return 0
 
@@ -447,6 +596,23 @@ def build_parser() -> argparse.ArgumentParser:
     reindex_cmd.add_argument("--dry-run", action="store_true",
                              help="report what would change without writing")
     reindex_cmd.set_defaults(func=cmd_reindex)
+
+    fork = sub.add_parser(
+        "fork", help="replay to event N, then run live from there",
+        description="Replays events 0..N-1 from a run, then continues live "
+                    "from event N, recording the whole thing as a new run.")
+    fork.add_argument("run", nargs="?", default="last",
+                      help="run id, prefix, or 'last' (the default)")
+    fork.add_argument("--at", type=int, metavar="N", required=False,
+                      help="events 0..N-1 are replayed; event N is the first live one")
+    fork.add_argument("--patch", action="append", metavar="EXPR",
+                      help="change event N, e.g. 'llm.model=gpt-4o' "
+                           "(repeatable; see the README for the grammar)")
+    fork.add_argument("--edit", action="store_true",
+                      help="open $EDITOR on event N before forking")
+    fork.add_argument("--loose", action="store_true",
+                      help="match the replayed prefix on content hash alone")
+    fork.set_defaults(func=cmd_fork)
 
     ls = sub.add_parser("ls", help="list recorded runs, newest first")
     ls.add_argument("-n", "--limit", type=int, default=20)

@@ -23,11 +23,67 @@ from __future__ import annotations
 import importlib
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
+import json
+
 from .. import _originals, callsite
 from ..recorder import Recorder, boundary, in_boundary
 from . import common, replay as replay_support
 
 _SENTINEL = object()
+
+
+def _fork_rewrite(engine: Any, httpx: Any, request: Any):
+    """Apply a fork's request patches to an outgoing call.
+
+    Returns ``(request, substituted_body)``. A patch that substitutes the
+    *result* short-circuits the call entirely; one that rewrites the request
+    rebuilds it with a new body, dropping the length headers so the client
+    recomputes them rather than contradicting the bytes we hand it.
+    """
+    if not getattr(engine, "forking", False):
+        return request, None
+
+    substituted, value = engine.substitute("llm")
+    if substituted:
+        return request, value
+
+    try:
+        original = json.loads(request.content.decode("utf-8"))
+    except Exception:
+        return request, None
+    if not isinstance(original, dict):
+        return request, None
+
+    patched = engine.rewrite_body("llm", original)
+    if patched == original:
+        return request, None
+
+    headers = [(k, v) for k, v in request.headers.raw
+               if k.lower() not in (b"content-length", b"transfer-encoding")]
+    return (
+        httpx.Request(request.method, request.url, headers=headers,
+                      content=json.dumps(patched).encode("utf-8"),
+                      extensions=request.extensions),
+        None,
+    )
+
+
+def _substituted_response(httpx: Any, request: Any, value: Any):
+    """A response carrying a patched completion, in the provider's own shape."""
+    text = value if isinstance(value, str) else json.dumps(value)
+    if "anthropic" in str(request.url) or "/v1/messages" in str(request.url):
+        body = {"id": "msg_patched", "type": "message", "role": "assistant",
+                "model": "patched", "content": [{"type": "text", "text": text}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 0, "output_tokens": 0}}
+    else:
+        body = {"id": "chatcmpl-patched", "object": "chat.completion",
+                "model": "patched",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": text}}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+    return httpx.Response(200, headers=[("content-type", "application/json")],
+                          content=json.dumps(body).encode("utf-8"))
 
 
 def _extensions_meta(extensions: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -289,7 +345,17 @@ class HttpxShim:
                     return self._inner.handle_request(request)
                 started = _originals.perf_counter()
                 site = callsite.caller(1, skip_libraries=True)
+                request, substituted = _fork_rewrite(recorder, httpx, request)
                 finish = _make_recorder_callback(recorder, request, started, site, None)
+                if substituted is not None:
+                    # A patched completion: nothing goes out, and the event is
+                    # recorded as though it had.
+                    response = _substituted_response(httpx, request, substituted)
+                    finish.status_code = response.status_code
+                    finish.headers = response.headers
+                    finish.meta = {"patched": True}
+                    finish(list(response.iter_bytes()), [], False)
+                    return response
                 try:
                     with boundary():
                         response = self._inner.handle_request(request)
@@ -326,7 +392,15 @@ class HttpxShim:
                     return await self._inner.handle_async_request(request)
                 started = _originals.perf_counter()
                 site = callsite.caller(1, skip_libraries=True)
+                request, substituted = _fork_rewrite(recorder, httpx, request)
                 finish = _make_recorder_callback(recorder, request, started, site, None)
+                if substituted is not None:
+                    response = _substituted_response(httpx, request, substituted)
+                    finish.status_code = response.status_code
+                    finish.headers = response.headers
+                    finish.meta = {"patched": True}
+                    finish(list(response.iter_bytes()), [], False)
+                    return response
                 try:
                     with boundary():
                         response = await self._inner.handle_async_request(request)

@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 from .core.spans import span
 from .core.tape import (
@@ -113,8 +113,29 @@ def _autoinstall_from_env() -> None:
     anything else.
     """
     mode = os.environ.get("REELTIME_MODE", "record")
-    if mode != "replay":
+    if mode not in ("replay", "fork"):
         install(run_id=os.environ.get("REELTIME_RUN_ID") or None)
+        return
+
+    if mode == "fork":
+        import json as _json
+
+        from .core.patch import parse_all
+
+        override = None
+        override_path = os.environ.get("REELTIME_FORK_OVERRIDE")
+        if override_path:
+            with open(override_path) as handle:
+                override = _json.load(handle)
+        install(
+            "fork",
+            replay=os.environ.get("REELTIME_REPLAY"),
+            run_id=os.environ.get("REELTIME_RUN_ID") or None,
+            fork_at=int(os.environ.get("REELTIME_FORK_AT", "0")),
+            patches=parse_all(_json.loads(os.environ.get("REELTIME_FORK_PATCH") or "[]")),
+            override=override,
+            strictness=os.environ.get("REELTIME_STRICTNESS", "default"),
+        )
         return
 
     stop_at = os.environ.get("REELTIME_STOP_AT")

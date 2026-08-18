@@ -452,3 +452,136 @@ def test_reindex_defaults_to_the_last_run(tape_dir, server, capsys):
 def test_last_on_an_empty_directory_still_says_no_runs(tmp_path, capsys):
     assert run_cli("--tape-dir", str(tmp_path / ".tape"), "show", "last") == 1
     assert "no runs recorded" in capsys.readouterr().err
+
+
+# -- fork ----------------------------------------------------------------
+
+
+@pytest.fixture
+def forkable(tmp_path):
+    """A recorded script whose events are all ambient, so a fork needs no keys."""
+    script = tmp_path / "agent.py"
+    script.write_text(textwrap.dedent("""
+        import random, uuid
+        for i in range(3):
+            print("step", i, round(random.random(), 6))
+    """))
+    tape_dir = tmp_path / ".tape"
+    assert run_cli("--tape-dir", str(tape_dir), "run", sys.executable, str(script)) == 0
+    return tape_dir, script
+
+
+def editor_writing(tmp_path, body):
+    """A fake $EDITOR that replaces the buffer with `body`."""
+    script = tmp_path / "fake_editor.py"
+    script.write_text(textwrap.dedent("""
+        import sys
+        open(sys.argv[1], "w").write({!r})
+    """).format(body))
+    return "{} {}".format(sys.executable, script)
+
+
+def test_fork_replays_a_prefix_and_runs_the_rest(forkable, capsys):
+    tape_dir, _ = forkable
+    parent = paths.list_run_ids(tape_dir)[0]
+
+    assert run_cli("--tape-dir", str(tape_dir), "fork", parent, "--at", "1") == 0
+    err = capsys.readouterr().err
+    assert "forked →" in err
+    assert "1 replayed, 2 live" in err
+    assert "forked at event 1" in err
+
+    runs = paths.list_run_ids(tape_dir)
+    assert len(runs) == 2
+    child = tape.read_trace(paths.trace_path(tape_dir, runs[-1]))
+    assert child.header.forked_from == parent
+    assert child.header.fork_at == 1
+    assert child.complete
+
+
+def test_fork_needs_a_point(forkable, capsys):
+    tape_dir, _ = forkable
+    assert run_cli("--tape-dir", str(tape_dir), "fork", "last") == 1
+    assert "fork needs a point" in capsys.readouterr().err
+
+
+def test_a_malformed_patch_is_refused_without_forking(forkable, capsys):
+    tape_dir, _ = forkable
+    before = paths.list_run_ids(tape_dir)
+    assert run_cli("--tape-dir", str(tape_dir), "fork", "last", "--at", "1",
+                   "--patch", "gibberish") == 1
+    assert "Expected <kind>" in capsys.readouterr().err
+    assert paths.list_run_ids(tape_dir) == before      # no run was created
+
+
+def test_ls_shows_parentage(forkable, capsys):
+    tape_dir, _ = forkable
+    parent = paths.list_run_ids(tape_dir)[0]
+    run_cli("--tape-dir", str(tape_dir), "fork", parent, "--at", "1")
+    capsys.readouterr()
+
+    run_cli("--tape-dir", str(tape_dir), "ls")
+    out = capsys.readouterr().out
+    assert "← {}@1".format(parent[:14]) in out
+
+
+# -- fork --edit ---------------------------------------------------------
+
+
+def test_edit_lets_you_rewrite_the_event(forkable, tmp_path, capsys, monkeypatch):
+    tape_dir, _ = forkable
+    edited = json.dumps({"i": 1, "kind": "rand", "site": "agent.py:4",
+                         "req": {"name": "random"}, "res": {"value": 0.5}})
+    monkeypatch.setenv("REELTIME_EDITOR", editor_writing(tmp_path, edited))
+
+    assert run_cli("--tape-dir", str(tape_dir), "fork", "last", "--at", "1",
+                   "--edit") == 0
+    assert "forked →" in capsys.readouterr().err
+    assert len(paths.list_run_ids(tape_dir)) == 2
+
+
+def test_edit_with_invalid_json_aborts_without_writing_a_run(
+    forkable, tmp_path, capsys, monkeypatch
+):
+    tape_dir, _ = forkable
+    before = paths.list_run_ids(tape_dir)
+    monkeypatch.setenv("REELTIME_EDITOR", editor_writing(tmp_path, "{not json,,,"))
+
+    assert run_cli("--tape-dir", str(tape_dir), "fork", "last", "--at", "1",
+                   "--edit") == 1
+    err = capsys.readouterr().err
+    assert "not valid JSON" in err
+    assert "nothing was forked" in err
+    assert paths.list_run_ids(tape_dir) == before
+
+
+def test_edit_with_an_empty_buffer_aborts(forkable, tmp_path, capsys, monkeypatch):
+    tape_dir, _ = forkable
+    before = paths.list_run_ids(tape_dir)
+    monkeypatch.setenv("REELTIME_EDITOR", editor_writing(tmp_path, "   \n"))
+
+    assert run_cli("--tape-dir", str(tape_dir), "fork", "last", "--at", "1",
+                   "--edit") == 1
+    assert "empty buffer" in capsys.readouterr().err
+    assert paths.list_run_ids(tape_dir) == before
+
+
+def test_edit_with_a_json_array_is_refused(forkable, tmp_path, capsys, monkeypatch):
+    tape_dir, _ = forkable
+    monkeypatch.setenv("REELTIME_EDITOR", editor_writing(tmp_path, "[1, 2, 3]"))
+    assert run_cli("--tape-dir", str(tape_dir), "fork", "last", "--at", "1",
+                   "--edit") == 1
+    assert "must be a JSON object" in capsys.readouterr().err
+
+
+def test_an_editor_that_fails_aborts_the_fork(forkable, tmp_path, capsys, monkeypatch):
+    tape_dir, _ = forkable
+    before = paths.list_run_ids(tape_dir)
+    failing = tmp_path / "failing_editor.py"
+    failing.write_text("import sys; sys.exit(3)")
+    monkeypatch.setenv("REELTIME_EDITOR", "{} {}".format(sys.executable, failing))
+
+    assert run_cli("--tape-dir", str(tape_dir), "fork", "last", "--at", "1",
+                   "--edit") == 1
+    assert "exited 3" in capsys.readouterr().err
+    assert paths.list_run_ids(tape_dir) == before

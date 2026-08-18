@@ -30,6 +30,7 @@ from . import fmt, ids, paths, spans
 from .blobs import BlobStore
 from .config import Config
 from .decoders import decode as decode_event
+from .fork import ForkEngine, check_patches, missing_credentials
 from .http import HttpShim
 from .matching import DEFAULT as DEFAULT_STRICTNESS
 from .matching import STRICTNESSES
@@ -192,8 +193,10 @@ class Tape:
         uninstall()
 
     def __repr__(self) -> str:
-        count = (self.engine.consumed if self.replaying
-                 else self.engine.stats.events)
+        # A fork is both at once, so ask for whichever counter exists.
+        stats = getattr(self.engine, "stats", None)
+        count = stats.events if stats is not None else getattr(
+            self.engine, "consumed", 0)
         return "<Tape {} mode={} events={}>".format(self.run_id, self.mode.value, count)
 
 
@@ -237,6 +240,9 @@ def install(
     stop_at: Optional[int] = None,
     realtime: bool = False,
     stepper: Optional[Any] = None,
+    fork_at: Optional[int] = None,
+    patches: Optional[Sequence[Any]] = None,
+    override: Optional[Dict[str, Any]] = None,
     **config_overrides: Any,
 ) -> Tape:
     """Start recording, or start replaying.
@@ -268,10 +274,6 @@ def install(
                 mode, ", ".join(m.value for m in Mode)
             )
         )
-    if resolved_mode is Mode.FORK:
-        raise TapeConfigError(
-            "mode 'fork' is not implemented yet -- fork lands in milestone 5"
-        )
 
     config = Config.resolve(tape_dir=tape_dir, **config_overrides)
 
@@ -279,6 +281,12 @@ def install(
         return _install_player(
             config, replay, strictness=strictness, stop_at=stop_at,
             realtime=realtime, stepper=stepper,
+        )
+
+    if resolved_mode is Mode.FORK:
+        return _install_fork(
+            config, replay, fork_at=fork_at, patches=patches, override=override,
+            strictness=strictness, run_id=run_id, argv=argv,
         )
 
     paths.ensure_tape_dir(config.tape_dir)
@@ -351,19 +359,8 @@ def _install_player(
                 strictness, ", ".join(STRICTNESSES))
         )
 
-    available = paths.list_run_ids(config.tape_dir)
-    if not available:
-        raise TapeConfigError(
-            "no runs to replay in {}".format(paths.display_path(config.tape_dir))
-        )
-    run = ids.resolve_prefix(replay, available)
-    trace = read_trace(paths.trace_path(config.tape_dir, run))
-
-    redactor = Redactor(DEFAULT_PATTERNS)
-    for pattern in config.redact:
-        redactor.add(pattern, "config")
-    for pattern, label in _extra_patterns:
-        redactor.add(pattern, label)
+    run, trace = _load_parent(config, replay)
+    redactor = _build_redactor(config)
 
     player = Player(
         trace,
@@ -381,6 +378,111 @@ def _install_player(
 
     tape = Tape(Mode.REPLAY, run, config, trace.header, player, patcher, trace.path, http)
     tape.restore_excepthook = _install_stop_excepthook()
+    _global = tape
+    spans.reset()
+    atexit.register(_close_at_exit)
+    return tape
+
+
+def _load_parent(config: Config, replay: Optional[str]):
+    """Resolve a run id (or prefix, or `last`) and read its trace."""
+    available = paths.list_run_ids(config.tape_dir)
+    if not available:
+        raise TapeConfigError(
+            "no runs in {}".format(paths.display_path(config.tape_dir))
+        )
+    if not replay or str(replay).lower() in ("last", "latest", "-"):
+        run = available[-1]
+    else:
+        run = ids.resolve_prefix(replay, available)
+    return run, read_trace(paths.trace_path(config.tape_dir, run))
+
+
+def _build_redactor(config: Config) -> Redactor:
+    redactor = Redactor(DEFAULT_PATTERNS)
+    for pattern in config.redact:
+        redactor.add(pattern, "config")
+    for pattern, label in _extra_patterns:
+        redactor.add(pattern, label)
+    return redactor
+
+
+def _install_fork(
+    config: Config,
+    replay: Optional[str],
+    *,
+    fork_at: Optional[int],
+    patches: Optional[Sequence[Any]],
+    override: Optional[Dict[str, Any]],
+    strictness: str,
+    run_id: Optional[str],
+    argv: Optional[Sequence[str]],
+) -> Tape:
+    """Replay a prefix, then run live, recording the whole thing as a new run."""
+    global _global
+
+    if not replay:
+        raise TapeConfigError(
+            "fork mode needs a run to fork: install('fork', replay=..., fork_at=N)")
+    if fork_at is None:
+        raise TapeConfigError("fork mode needs --at N")
+
+    parent, trace = _load_parent(config, replay)
+    if fork_at < 0:
+        raise TapeConfigError("--at must be zero or more, not {}".format(fork_at))
+    if fork_at > len(trace.events):
+        raise TapeConfigError(
+            "--at {} is past the end of run {}, which has {} events".format(
+                fork_at, parent[:14], len(trace.events))
+        )
+
+    parsed = list(patches or [])
+    check_patches(parsed, trace, fork_at)
+
+    # Fail before replaying anything: burning the prefix and then dying for
+    # want of a key is the worst possible order to discover that in.
+    missing = missing_credentials(trace, fork_at)
+    if missing:
+        raise TapeConfigError(
+            "this fork runs live from event {}, and those calls need:\n{}\n"
+            "Set them and try again.".format(
+                fork_at,
+                "\n".join("  {}  (for {})".format(var, host) for host, var in missing))
+        )
+
+    redactor = _build_redactor(config)
+    blobs = BlobStore(paths.blobs_dir(config.tape_dir), config.blob_threshold)
+
+    child = run_id or ids.new_run_id()
+    trace_file = paths.trace_path(config.tape_dir, child)
+    from .. import __version__
+
+    header = build_header(
+        child, mode=Mode.FORK.value, argv=argv or trace.header.argv,
+        cwd=os.getcwd(), redactor=redactor, env_patterns=config.env_capture,
+        collect_git_info=config.collect_git, tool_version=__version__,
+    )
+    header.forked_from = parent
+    header.fork_at = fork_at
+
+    writer = TraceWriter(trace_file).open()
+    writer.write_header(header)
+
+    recorder = Recorder(
+        writer, blobs, redactor,
+        record_library_ambient=config.record_library_ambient,
+        enrich=decode_event if config.decode else None,
+    )
+    player = Player(
+        trace, blobs, redactor, strictness=strictness,
+        record_library_ambient=config.record_library_ambient,
+    )
+    engine = ForkEngine(player, recorder, fork_at, parsed, override)
+
+    patcher = AmbientPatcher(engine, config.patch).install() if config.patch else None
+    http = HttpShim(engine).install() if config.http else None
+
+    tape = Tape(Mode.FORK, child, config, header, engine, patcher, trace_file, http)
     _global = tape
     spans.reset()
     atexit.register(_close_at_exit)

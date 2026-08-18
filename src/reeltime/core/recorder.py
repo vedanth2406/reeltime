@@ -304,6 +304,34 @@ class Recorder:
                     dur_ms=(_originals.perf_counter() - started) * 1000.0,
                 )
 
+    def copy_event(
+        self, event: Event, meta_extra: Optional[Dict[str, Any]] = None
+    ) -> Optional[Event]:
+        """Write an event from another trace into this run, renumbered.
+
+        Used by a fork to carry the replayed prefix into its own trace, so the
+        result is a complete run rather than a suffix -- replayable, and
+        forkable again. Blob references are left alone: both runs share one
+        blob store, and the payload they name is identical by construction.
+        """
+        if not self.enabled:
+            return None
+        clone = Event(
+            i=next(self._counter),
+            kind=event.kind,
+            site=event.site,
+            qual=event.qual,
+            span=event.span,
+            t_rel=round(self.elapsed, 6),
+            dur_ms=event.dur_ms,
+            req=event.req,
+            res=event.res,
+            meta=dict(event.meta, **(meta_extra or {})),
+        )
+        self.stats.add(clone)
+        self.writer.write_event(clone)
+        return clone
+
     def resolved(self, event: Event, payload: Optional[Dict[str, Any]]) -> Any:
         """Mirror of :meth:`Player.resolved`, so callers need not branch."""
         if payload is None:

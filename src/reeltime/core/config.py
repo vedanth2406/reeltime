@@ -119,6 +119,9 @@ def _from_env() -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     mapping = {
         "REELTIME_BLOB_THRESHOLD": "blob_threshold",
+        # Note: REELTIME_PATCH is the *ambient patch groups*. The fork
+        # expressions travel as REELTIME_FORK_PATCH -- reusing this name once
+        # silently disabled all ambient recording in forked children.
         "REELTIME_PATCH": "patch",
         "REELTIME_STDLIB_AMBIENT": "record_library_ambient",
         "REELTIME_HTTP": "http",

@@ -241,6 +241,76 @@ Every drifted or fuzzy match is summarised at the end of the run. A match
 nobody mentions is silent divergence, which is the one thing this tool must
 never do.
 
+## Fork
+
+Replay to a step, change one thing, and run live from there. The first N events
+are free and identical, so you are testing exactly one variable instead of
+re-running the whole agent and hoping the bug recurs.
+
+```bash
+tape fork <run> --at 13
+tape fork <run> --at 13 --patch 'llm.model=claude-sonnet-4-5'
+tape fork <run> --at 13 --patch 'llm.system+="Ask before destructive actions."'
+tape fork <run> --at 7  --patch 'tool.read_file.result="<empty file>"'
+tape fork <run> --at 13 --edit          # open $EDITOR on the event first
+```
+
+```console
+$ tape fork 01M0BDHF --at 1 --patch 'llm.system+="Use the full listing."'
+✓ forked → 01M0BDK0WA531Q  (1 replayed, 2 live, $0.0004)
+  parent 01M0BDHF8JK3MT · forked at event 1
+  patched llm.system+="Use the full listing."
+```
+
+**`--at N` replays events 0 through N−1. Event N is the first live one, and the
+patch applies to it on its way out.** That is the one thing worth being pedantic
+about: `--at 0` runs everything live, `--at len(run)` replays everything, and
+`--at 13` means the thirteen events before 13 are free.
+
+A fork writes both halves to its own run, so it is a complete trace — replayable
+and forkable again. The parent is never modified. `tape ls` shows parentage:
+
+```console
+RUN             WHEN               EVENTS      DUR     COST  COMMAND
+01M0BDK0WA531Q  2026-08-18 14:31        3     0.4s  $0.0004  agent.py  ← 01M0BDHF8JK3MT@1
+01M0BDHF8JK3MT  2026-08-18 14:30        3     1.2s  $0.0011  agent.py
+```
+
+### The patch grammar
+
+`<kind>[.<name>].<field>` followed by an operator and a value. Values parse as
+JSON when they are JSON, and as a bare string otherwise — so
+`llm.model=gpt-4o` needs no quotes.
+
+| Operator | Meaning |
+|---|---|
+| `=` | replace |
+| `+=` | append to a string, add to a number, extend a list |
+| `~=` | regex substitution, written `/pattern/replacement/` |
+
+| Kind | Field | Effect |
+|---|---|---|
+| `llm` | `model` | swap the model on the outgoing request |
+| `llm` | `system` | the system prompt, wherever the provider keeps it |
+| `llm` | `temperature`, `top_p`, `max_tokens`, `seed` | request parameters |
+| `llm` | `response` | substitute the completion; **no live call is made** |
+| `tool` | `result` | substitute the return value; **the body does not run** |
+| `http` | `url`, `body` | rewrite the request |
+
+`llm.system` finds the system prompt whichever way the provider carries it —
+Anthropic's top-level `system` field or OpenAI's first `role: system` message —
+so one expression works against both. Fields that substitute a *result* stop the
+boundary executing at all; everything else rewrites the request and the call
+still happens.
+
+Anything the grammar cannot express is what `--edit` is for: it opens `$EDITOR`
+on the event at the fork point and uses the request body you save. An empty
+buffer or invalid JSON aborts without creating a run.
+
+A fork needs live credentials from event N onward. Those are checked **before**
+anything is replayed, so a missing key costs you an error message rather than a
+replayed prefix and then an error message.
+
 ## Why interception is at the transport layer
 
 On **2026-08-18** the OpenAI Python SDK (3.2.0) is built on `httpx2` 2.10, while
@@ -392,16 +462,17 @@ which is the zero-edit claim made concrete.
 | 2 | httpx shim, provider decoders, `@tape.tool`, streaming, `run/ls/show` | ✅ |
 | 3 | Player, three-tier matcher, `TapeMiss`, `tape replay` | ✅ |
 | 4 | `--context`, `tape reindex`, examples, **v0.1.0** | ✅ |
-| 5 | `tape fork <run> --at N --patch …` | next |
-| 5.5 | MCP adapter | |
+| 5 | `tape fork <run> --at N --patch …` | ✅ |
+| 5.5 | MCP adapter | next |
 | 6 | `tape diff`, divergence-point reporting | |
 | 7 | `tape doctor` — find a run's nondeterminism sources | |
 | 8 | LangChain callback adapter | |
 | 9 | Overhead benchmarks, docs site | v1.0 |
 | 10 | Web UI | |
 
-`tape fork` is the one to watch: replay to step 13, change one thing, and run
-live from there — so testing a prompt fix costs one step instead of a whole run.
+MCP is next: no record/replay tool captures MCP sessions today, and a server
+that exposes a different tool set between runs is exactly the kind of thing that
+changes an agent's behaviour invisibly.
 
 ## Development
 
@@ -409,7 +480,7 @@ live from there — so testing a prompt fix costs one step instead of a whole ru
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 361 tests
+pytest                                  # 461 tests
 pytest --cov --cov-report=term-missing  # core/ is at 93%
 python examples/m3_replay_speed.py      # the benchmark above
 ```

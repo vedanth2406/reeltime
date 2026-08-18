@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-08-18
+
+### Added
+
+- **`tape fork <run> --at N`** — replay events 0..N−1 from a run, then continue
+  live from event N, recording the whole thing as a new run. The first N events
+  are free and identical, so a prompt fix costs one step instead of a whole run.
+- **`--patch` expressions**: `<kind>[.<name>].<field>` with `=`, `+=`, and `~=`
+  (regex substitution). `llm.system` finds the system prompt whichever way the
+  provider carries it, so one expression works against OpenAI and Anthropic
+  alike. Patches that substitute a *result* stop the boundary executing at all.
+- **`--edit`** opens `$EDITOR` on the event at the fork point. An empty buffer
+  or invalid JSON aborts without creating a run.
+- **Lineage**: `forked_from` and `fork_at` in the header, shown in `tape ls` as
+  `← <parent>@<n>`. A fork is a complete trace, so it can be replayed and forked
+  again; the chain is walkable back to the root.
+- Patches and missing credentials are both checked **before** anything is
+  replayed, so a mistake costs an error message rather than a replayed prefix
+  and then an error message.
+
+### Fixed
+
+- `numpy` is now a dev dependency. Without it, a module-level `importorskip`
+  was silently skipping all 25 tests in `test_patches.py` rather than the two
+  that needed numpy — including the ones covering the opt-in `datetime` patch.
+- `Tape.__repr__` assumed only a Player could be replaying, and raised on a
+  fork.
+
 ## [0.1.1] — 2026-08-18
 
 First published release. `0.1.0` was built and rehearsed through TestPyPI but
