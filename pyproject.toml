@@ -48,6 +48,8 @@ dev = [
   # The ambient patcher supports numpy.random; without it here, its tests are
   # skipped and the support rots unnoticed.
   "numpy>=1.26",
+  # The wheel gate builds a distribution as part of the test run.
+  "build>=1.0",
 ]
 
 [project.urls]
@@ -67,7 +69,12 @@ artifacts = ["src/reeltime/_bootstrap/sitecustomize.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# The wheel gate builds a distribution and a virtualenv, so it is deselected
+# from the inner loop and run explicitly in CI with `pytest -m wheel`.
+addopts = "-q -m 'not wheel'"
+markers = [
+  "wheel: installs the built wheel into a symlinked virtualenv (slow; CI gate)",
+]
 
 [tool.coverage.run]
 source = ["src/reeltime/core"]
