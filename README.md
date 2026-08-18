@@ -8,8 +8,8 @@ received.
 [![Python](https://img.shields.io/pypi/pyversions/reeltime.svg)](https://pypi.org/project/reeltime/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-<!-- Replace this block with docs/demo.gif once the repo is pushed:
-     vhs docs/demo.tape  →  ![demo](https://raw.githubusercontent.com/vedanth2406/reeltime/main/docs/demo.gif)
+<!-- Replace this block with the GIF once the repo is pushed:
+     vhs demo.tape  →  ![demo](https://raw.githubusercontent.com/vedanth2406/reeltime/main/demo.gif)
      See RELEASE.md for the ordering — PyPI snapshots this file at upload. -->
 
 ```console
