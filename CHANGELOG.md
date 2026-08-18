@@ -25,6 +25,18 @@ All notable changes to this project are documented here. This project follows
 
 ### Fixed
 
+- **Call sites and ambient events were broken wherever the install path
+  contains a symlink** — which includes any virtualenv under `/tmp` on macOS,
+  since `/tmp` is a symlink to `/private/tmp`. The package, stdlib and
+  site-packages roots are computed with `Path.resolve()` while `co_filename` is
+  not resolved, so every prefix comparison failed: reeltime's own frames stopped
+  counting as internal, call sites were attributed to reeltime's modules rather
+  than to the caller, and **every ambient event (`random`, `uuid`, clock) was
+  discarded** as though it came from a library. HTTP and tool events were still
+  recorded, but with a call site pointing into reeltime. Present since 0.1.0 and
+  invisible to the test suite, which runs from an unsymlinked checkout; found by
+  installing the wheel into a throwaway venv and watching a three-event script
+  record nothing.
 - `numpy` is now a dev dependency. Without it, a module-level `importorskip`
   was silently skipping all 25 tests in `test_patches.py` rather than the two
   that needed numpy — including the ones covering the opt-in `datetime` patch.

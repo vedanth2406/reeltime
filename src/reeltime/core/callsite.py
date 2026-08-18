@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import os
+import pathlib
 import sys
 import sysconfig
 from pathlib import Path
@@ -60,6 +61,30 @@ _LIBRARY_DIRS = _library_dirs()
 UNKNOWN = "<unknown>:0"
 
 _display_cache: Dict[str, str] = {}
+_resolved_cache: Dict[str, str] = {}
+
+
+def _resolved(filename: str) -> str:
+    """A frame's filename with symlinks resolved, cached.
+
+    The package, stdlib and site-packages roots are all computed with
+    ``Path.resolve()``, but ``co_filename`` keeps whatever path the module was
+    imported by. Anywhere those differ -- a virtualenv under ``/tmp`` on macOS,
+    where ``/tmp`` is a symlink to ``/private/tmp``, or a symlinked home --
+    every ``startswith`` comparison silently fails. reeltime's own frames then
+    stop counting as internal, so call sites are attributed to reeltime instead
+    of to the caller, and every ambient event is discarded as though it came
+    from a library.
+    """
+    cached = _resolved_cache.get(filename)
+    if cached is not None:
+        return cached
+    try:
+        resolved = str(pathlib.Path(filename).resolve())
+    except (OSError, ValueError):  # pragma: no cover - exotic filenames
+        resolved = filename
+    _resolved_cache[filename] = resolved
+    return resolved
 
 
 class CallSite(NamedTuple):
@@ -104,17 +129,21 @@ def _display(filename: str) -> str:
 
 
 def _is_stdlib(filename: str) -> bool:
+    filename = _resolved(filename)
     return filename.startswith(_STDLIB_DIR) and "site-packages" not in filename
 
 
 def _is_internal(filename: str) -> bool:
-    return filename.startswith(_PACKAGE_ROOT) or filename in _TRANSPARENT_FILES
+    if filename in _TRANSPARENT_FILES:
+        return True
+    return _resolved(filename).startswith(_PACKAGE_ROOT)
 
 
 def _is_library(filename: str) -> bool:
     """True for installed third-party or standard-library code."""
     if _is_stdlib(filename):
         return True
+    filename = _resolved(filename)
     if "site-packages" in filename or "dist-packages" in filename:
         return True
     return any(filename.startswith(directory) for directory in _LIBRARY_DIRS)
@@ -177,5 +206,6 @@ def caller(depth: int = 1, skip_libraries: bool = False) -> CallSite:
 
 
 def clear_cache() -> None:
-    """Drop the display-path cache (the cwd changed, or a test moved dirs)."""
+    """Drop the path caches (the cwd changed, or a test moved dirs)."""
     _display_cache.clear()
+    _resolved_cache.clear()
