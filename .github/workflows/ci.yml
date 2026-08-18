@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit · py${{ matrix.python }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pytest --cov --cov-report=term
+      # core/ is the engine; the bar is stated in the spec and enforced here.
+      - run: pytest --cov --cov-fail-under=85 -q
+
+  wheel:
+    # The gate the unit suite structurally cannot be: it runs from a checkout
+    # with no symlinks in its path, so it cannot catch a bug that only appears
+    # when the install path has one. This job installs the built wheel into a
+    # virtualenv reached through a symlink and insists that a three-event
+    # script records three events -- the exact failure that shipped in 0.1.0
+    # and 0.1.1, where every ambient event was silently discarded.
+    name: wheel install · symlinked path · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS because /tmp is a symlink to /private/tmp there, which is how
+        # the bug reached users; Linux because the test makes its own symlink
+        # and the behaviour should not depend on the platform doing it for us.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest -m wheel -v
+
+  package:
+    name: package metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build twine
+      - run: python -m build
+      # Catches a README that would render as raw text on PyPI, which cannot be
+      # fixed after upload without a version bump.
+      - run: python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
