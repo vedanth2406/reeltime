@@ -56,3 +56,37 @@ def test_frames_inside_reeltime_are_never_reported():
     site = _helper()
     assert site.file.endswith("test_callsite.py")
     assert "reeltime" not in site.file
+
+
+def test_frame_paths_are_compared_with_symlinks_resolved(tmp_path, monkeypatch):
+    """A symlinked install path must not stop reeltime recognising its own frames.
+
+    The roots are computed with Path.resolve(); co_filename is not resolved. On
+    macOS a virtualenv under /tmp is reached as /private/tmp, so every
+    startswith comparison failed: call sites were attributed to reeltime's own
+    modules, and ambient events were discarded as library noise.
+    """
+    real = tmp_path / "real" / "reeltime"
+    real.mkdir(parents=True)
+    (real / "core.py").write_text("x = 1\n")
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "real")
+
+    monkeypatch.setattr(callsite, "_PACKAGE_ROOT", str(real.resolve()))
+    callsite.clear_cache()
+
+    through_link = str(link / "reeltime" / "core.py")
+    assert through_link != str(real / "core.py")
+    assert callsite._is_internal(through_link)
+    assert callsite._is_internal(str(real / "core.py"))
+
+
+def test_site_packages_is_detected_through_a_symlink(tmp_path, monkeypatch):
+    real = tmp_path / "real" / "lib" / "site-packages"
+    real.mkdir(parents=True)
+    (real / "thing.py").write_text("x = 1\n")
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "real")
+
+    callsite.clear_cache()
+    assert callsite._is_library(str(link / "lib" / "site-packages" / "thing.py"))
