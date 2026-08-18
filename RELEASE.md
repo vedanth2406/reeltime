@@ -82,23 +82,24 @@ transcript is legible, and the box-drawing characters line up.
 
 ```bash
 brew install vhs            # or: go install github.com/charmbracelet/vhs@latest
-vhs docs/demo.tape          # writes docs/demo.gif
+vhs demo.tape               # writes demo.gif at the repo root
 ```
 
-The tape drives `examples/truncation_bug.py`, which embeds a mock provider, so
-recording it costs nothing and produces the same output for everyone. Adjust the
-`~/reeltime` path in `docs/demo.tape` if your checkout is elsewhere.
+Run it from the repo root. The tape drives `examples/truncation_bug.py`, which
+embeds a mock provider, so recording costs nothing and comes out the same for
+everyone; it records into a temp directory, so an existing `.tape/` is left
+alone.
 
 Watch the result once before committing. Then:
 
 ```bash
-git add docs/demo.gif && git commit -m "Add the demo GIF" && git push
+git add demo.gif && git commit -m "docs: add demo gif" && git push
 ```
 
 Confirm the raw URL resolves — this is the thing step 5 depends on:
 
 ```bash
-curl -sI https://raw.githubusercontent.com/vedanth2406/reeltime/main/docs/demo.gif \
+curl -sI https://raw.githubusercontent.com/vedanth2406/reeltime/main/demo.gif \
   | head -1        # expect: HTTP/2 200
 ```
 
@@ -108,7 +109,7 @@ Replace the HTML comment and the ```` ```console ```` transcript block at the to
 `README.md` with:
 
 ```markdown
-![reeltime: record an agent, replay it offline, and see what the model actually read](https://raw.githubusercontent.com/vedanth2406/reeltime/main/docs/demo.gif)
+![reeltime: record an agent, replay it offline, and see what the model actually read](https://raw.githubusercontent.com/vedanth2406/reeltime/main/demo.gif)
 ```
 
 Keep the transcript underneath the GIF rather than deleting it. It is what

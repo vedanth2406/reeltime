@@ -1,12 +1,15 @@
 # The README's terminal GIF. Requires vhs: https://github.com/charmbracelet/vhs
 #
-#   brew install vhs        # or: go install github.com/charmbracelet/vhs@latest
-#   vhs docs/demo.tape      # writes docs/demo.gif
+#   brew install vhs   # or: go install github.com/charmbracelet/vhs@latest
+#   vhs demo.tape      # writes demo.gif, next to this file
+#
+# Run it from the repo root; it records into a temp directory so it never
+# touches a .tape you care about.
 #
 # The demo needs no API key: examples/truncation_bug.py embeds a mock provider,
 # so the recording is free and comes out the same for everyone.
 
-Output docs/demo.gif
+Output demo.gif
 
 Set Shell bash
 Set FontSize 15
@@ -17,12 +20,13 @@ Set Theme "Builtin Dark"
 Set TypingSpeed 45ms
 
 Hide
-Type "cd $(mktemp -d) && clear"  Enter
+# Remember where the repo is, then work somewhere disposable.
+Type "REPO=$PWD; cd $(mktemp -d) && clear"  Enter
 Sleep 500ms
 Show
 
 # 1. The agent runs and gets the second answer wrong.
-Type "tape run python ~/reeltime/examples/truncation_bug.py"  Enter
+Type "tape run python $REPO/examples/truncation_bug.py"  Enter
 Sleep 5s
 
 # 2. Replay is instant, offline, and free.
