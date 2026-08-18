@@ -18,9 +18,9 @@ Or scope it::
         agent.go()
     print(run.summary.line())
 
-Milestone 1 records: randomness, uuids, clock reads, and anything you hand to
-:func:`record_event`. HTTP interception and ``@tape.tool`` arrive in M2,
-replay in M3.
+Records today: every HTTP call (httpx and requests, streaming included),
+``@tape.tool`` functions, randomness, uuids, and clock reads. Replay arrives
+in M3.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from .core.tape import (
     session,
     uninstall,
 )
+from .core.tools import is_wrapped, tool, wrap, wrap_all
 from .core.trace import KINDS, Event, Header, Trace, read_trace
 from .errors import TapeConfigError, TapeError, TapeMiss, TapeStateError
 
@@ -55,6 +56,10 @@ __all__ = [
     "record_event",
     "span",
     "redact",
+    "tool",
+    "wrap",
+    "wrap_all",
+    "is_wrapped",
     "read_trace",
     "Tape",
     "Mode",
@@ -92,9 +97,10 @@ def record_event(
 
 
 if os.environ.get("REELTIME_AUTOINSTALL"):
-    # Set by `tape run` (M2) so an unmodified script records itself.
+    # Set by `tape run`, which also injects a sitecustomize so this happens at
+    # interpreter startup -- before the agent imports httpx or anything else.
     try:
-        install()
+        install(run_id=os.environ.get("REELTIME_RUN_ID") or None)
     except Exception as _exc:  # pragma: no cover - never break a user's import
         import warnings
 

@@ -6,19 +6,36 @@ exactly at uninstall.
 
 Two design decisions worth knowing about:
 
-**Standard-library callers are ignored by default.** ``asyncio`` reads
-``time.monotonic()`` on every loop iteration and ``logging`` timestamps every
-record. Those reads belong to the runtime, not to the agent; recording them
-would bury the trace in thousands of uninteresting events and replaying them
-would hand a replayed clock to the event loop's own timeouts. Set
-``record_stdlib_ambient=True`` if you really want them.
+**Only the user's own code is recorded.** ``asyncio`` reads ``time.monotonic()``
+on every loop iteration, ``logging`` timestamps every record, and httpx reads
+``perf_counter()`` twice per request. Those reads belong to the runtime and to
+installed libraries, not to the agent: recording them would bury the trace in
+thousands of uninteresting events and replaying them would hand a replayed
+clock to the event loop's own timeouts. The same filter applies on replay, so
+those reads stay live in both directions -- consistent, and never a spurious
+miss. Set ``record_library_ambient=True`` if you really want them.
 
-**``datetime.datetime`` is replaced by a subclass with a custom metaclass.**
-``datetime`` is a C type whose methods cannot be assigned to, so the module
-attribute is swapped for a subclass. That alone would break ``isinstance(x,
-datetime.datetime)`` for any datetime produced by an unpatched path (arithmetic
-on datetimes returns the base type), so the metaclass overrides
-``__instancecheck__`` to answer for the real class.
+**``datetime`` patching is opt-in, and off by default.** ``datetime`` is a C
+type whose methods cannot be assigned to, so the only way to see
+``datetime.now()`` is to swap the module attribute for a subclass. Two problems
+follow, one solvable and one not:
+
+* Solvable: ``isinstance(x, datetime.datetime)`` would go false for any
+  datetime produced by an unpatched path, because arithmetic on datetimes
+  returns the base C type. The metaclass overrides ``__instancecheck__`` to
+  answer for the real class, so this is invisible again.
+* Not solvable: pydantic v2 dispatches on type *identity* -- ``obj is
+  datetime.datetime`` -- so once the module attribute is ours, the **real**
+  datetime class becomes unrecognisable to it. Any library that did ``from
+  datetime import datetime`` before ``install()`` then fails to build its
+  models, which is not a subtle degradation: the Anthropic SDK stops working
+  entirely. Install order does not help, because the annotation and the
+  dispatch table can hold different classes either way.
+
+So ``"datetime"`` is not in the default patch set. Turn it on with
+``patch=("random", "uuid", "time", "datetime")`` if your agent puts wall-clock
+time into prompts and your stack is not pydantic v2. ``time.time()`` is patched
+either way and covers most clock reads.
 """
 
 from __future__ import annotations
@@ -86,7 +103,12 @@ NUMPY_FUNCTIONS = (
     "bytes",
 )
 
-GROUPS = ("random", "uuid", "time", "datetime", "numpy")
+#: Patched unless configured otherwise. ``datetime`` is deliberately absent --
+#: see the module docstring.
+GROUPS = ("random", "uuid", "time", "numpy")
+
+#: Every group that can be requested, including the opt-in ones.
+ALL_GROUPS = ("random", "uuid", "time", "datetime", "numpy")
 
 
 def _permutation(before: Sequence[Any], after: Sequence[Any]) -> List[int]:
@@ -275,6 +297,20 @@ class AmbientPatcher:
 
         class RecordingDateTime(real, metaclass=_RecordingMeta):
             """``datetime.datetime`` that reports its wall-clock reads."""
+
+            @classmethod
+            def __get_pydantic_core_schema__(cls, source_type, handler):
+                """Tell pydantic v2 to treat this exactly like a datetime.
+
+                Only repairs annotations that resolve to *this* class. An
+                annotation still holding the real class cannot be repaired from
+                here, which is why the whole group is opt-in. Importing
+                pydantic_core inside the method is safe: nothing calls this
+                unless pydantic is already running.
+                """
+                from pydantic_core import core_schema
+
+                return core_schema.datetime_schema()
 
             @classmethod
             def now(cls, tz=None):

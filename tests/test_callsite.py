@@ -38,11 +38,16 @@ def test_display_paths_are_relative_to_the_cwd(tmp_path, monkeypatch):
     assert os.path.isabs(callsite._display("/elsewhere/lib.py"))
 
 
-def test_stdlib_frames_are_identified():
-    # The ambient patches lean on this to ignore the runtime's own clock reads.
+def test_library_frames_are_identified():
+    # The ambient patches lean on this to ignore clock reads made by the
+    # runtime and by installed packages, which are not the agent's doing.
+    import httpx
+
     assert callsite._is_stdlib(logging.__file__)
-    assert not callsite._is_stdlib(__file__)
-    assert not _helper().is_stdlib
+    assert callsite._is_library(logging.__file__)
+    assert callsite._is_library(httpx.__file__)  # site-packages, not stdlib
+    assert not callsite._is_library(__file__)
+    assert not _helper().is_library
 
 
 def test_frames_inside_reeltime_are_never_reported():

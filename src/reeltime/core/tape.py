@@ -28,6 +28,8 @@ from ..errors import TapeConfigError, TapeStateError
 from . import ids, paths, spans
 from .blobs import BlobStore
 from .config import Config
+from .decoders import decode as decode_event
+from .http import HttpShim
 from .patches import AmbientPatcher
 from .recorder import Recorder
 from .redact import DEFAULT_PATTERNS, Redactor
@@ -89,6 +91,7 @@ class Tape:
         recorder: Recorder,
         patcher: Optional[AmbientPatcher],
         path: Path,
+        http: Optional[HttpShim] = None,
     ) -> None:
         self.mode = mode
         self.run_id = run_id
@@ -96,6 +99,7 @@ class Tape:
         self.header = header
         self.recorder = recorder
         self.patcher = patcher
+        self.http = http
         self.path = path
         self.closed = False
         self.summary: Optional[RunSummary] = None
@@ -137,7 +141,10 @@ class Tape:
         self.closed = True
         if self.patcher is not None:
             self.patcher.uninstall()
-        footer = self.recorder.close(exit_code)
+        intercepted = list(self.http.installed) if self.http is not None else []
+        if self.http is not None:
+            self.http.uninstall()
+        footer = self.recorder.close(exit_code, intercepted=intercepted)
         self.summary = RunSummary(
             run_id=self.run_id,
             path=self.path,
@@ -266,14 +273,19 @@ def install(
         writer,
         BlobStore(paths.blobs_dir(config.tape_dir), config.blob_threshold),
         redactor,
-        record_stdlib_ambient=config.record_stdlib_ambient,
+        record_library_ambient=config.record_library_ambient,
+        enrich=decode_event if config.decode else None,
     )
 
     patcher = None
     if resolved_mode is Mode.RECORD and config.patch:
         patcher = AmbientPatcher(recorder, config.patch).install()
 
-    tape = Tape(resolved_mode, run, config, header, recorder, patcher, trace_file)
+    http = None
+    if resolved_mode is Mode.RECORD and config.http:
+        http = HttpShim(recorder).install()
+
+    tape = Tape(resolved_mode, run, config, header, recorder, patcher, trace_file, http)
     _global = tape
     spans.reset()
     atexit.register(_close_at_exit)

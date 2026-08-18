@@ -83,6 +83,8 @@ Both the OpenAI and Anthropic SDKs are built on `httpx`. Intercept there and you
 
 Install a custom `httpx.BaseTransport` / `AsyncBaseTransport` by patching `httpx.Client._transport_for_url` and the async equivalent at import time. Also patch `requests.adapters.HTTPAdapter.send` for older stacks.
 
+**There is more than one httpx.** As of 2026 the OpenAI SDK is built on `httpx2` while the Anthropic SDK is still on `httpx`. Both kept the same transport extension point, so the shim is parameterised by module and supporting the pair costs one argument — whereas an SDK-layer interceptor would have had to be rewritten for that migration. This is the concrete argument for principle 5, and worth stating in the README.
+
 Record: method, URL, headers (redacted), request body, status, response headers, response body, duration.
 
 **Streaming responses are a headline capability, not an edge case.** Most production agent code streams, and the closest competitor (AgentTape) refuses streaming outright — it warns and passes through live while recording, then raises on replay. Recording streams is therefore both the common case and the clearest thing we can do that nobody else can, so it ships in M2 with capture and M3 with replay, not late.
@@ -116,7 +118,7 @@ Patched at `tape.install()`:
 - `random.Random` methods on the global instance, plus `numpy.random` if numpy is importable
 - `uuid.uuid1` / `uuid.uuid4`
 - `time.time`, `time.monotonic`, `time.perf_counter`
-- `datetime.datetime.now` / `utcnow` (patch via a subclass assigned to the module attribute — `datetime` is a C type and can't be patched directly)
+- `datetime.datetime.now` / `utcnow` (patch via a subclass assigned to the module attribute — `datetime` is a C type and can't be patched directly). **Opt-in, and off by default as of M2:** pydantic v2 dispatches on type *identity*, so replacing the module attribute makes the real `datetime` class unrecognisable to it, and any library that imported it first stops building its models — the Anthropic SDK breaks outright. A metaclass fixes `isinstance`; nothing fixes identity dispatch. `time.time` is patched either way and covers most clock reads.
 - `os.environ` reads are **not** patched, but their values are snapshotted into the trace header for diffing
 
 ### 4.4 MCP adapter
@@ -315,7 +317,7 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 | M | Scope | Deliverable |
 |---|---|---|
 | **1** | Trace format, blob store, `Recorder`, `tape.install()`, ambient patches (rand/time/uuid) | Traces get written ✅ |
-| **2** | httpx transport shim (sync + async), `requests` fallback, provider decoders (§4.6), redaction on the HTTP path, `@tape.tool`, **streaming chunk capture**, `tape run`, `tape ls`, `tape show` | Records real OpenAI/Anthropic agents, streaming included |
+| **2** | httpx transport shim (sync + async), `requests` fallback, provider decoders (§4.6), redaction on the HTTP path, `@tape.tool`, **streaming chunk capture**, `tape run`, `tape ls`, `tape show` | Records real OpenAI/Anthropic agents, streaming included ✅ |
 | **3** | `Player`, three-tier matcher, `TapeMiss` errors, `tape replay --to/--step`, streaming re-emission (`--realtime`) | **Replay works — this is the core** |
 | **4** | `--context` inspection, `tape reindex`, README, PyPI publish | v0.1.0 released |
 | **5** | Fork + patch grammar, lineage tracking | `tape fork` |

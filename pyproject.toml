@@ -21,7 +21,18 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+# httpx/requests are optional at runtime -- the shim installs only if the
+# module is already importable. They are required to *test* the shim, and the
+# provider SDKs are required to prove the transport is genuinely
+# provider-agnostic rather than tuned to one client's request shape.
+dev = [
+  "pytest>=7.0",
+  "pytest-cov>=4.0",
+  "httpx>=0.27",
+  "requests>=2.32",
+  "openai>=1.66",
+  "anthropic>=0.40",
+]
 
 [project.urls]
 Homepage = "https://github.com/vedanth/reeltime"
@@ -32,6 +43,9 @@ tape = "reeltime.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/reeltime"]
+# The sitecustomize shim is data, not an importable submodule: `tape run` puts
+# its directory on PYTHONPATH so the interpreter picks it up at startup.
+artifacts = ["src/reeltime/_bootstrap/sitecustomize.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

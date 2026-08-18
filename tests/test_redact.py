@@ -108,3 +108,30 @@ def test_secrets_never_reach_disk(recording):
         assert secret not in blobs
     assert summary.redacted
     assert "redacted" in summary.redaction_line()
+
+
+@pytest.mark.parametrize(
+    "name", ["api_key", "apiKey", "API_KEY", "password", "client_secret",
+             "openai_api_key", "refresh_token", "AccessKey"]
+)
+def test_credential_field_names_are_redacted(name):
+    assert Redactor().scrub({name: "value"})[name] == "<redacted:named>"
+
+
+@pytest.mark.parametrize(
+    "name", ["key", "token", "auth", "max_tokens", "sort_key", "keyword",
+             "session", "authors", "monkey"]
+)
+def test_ordinary_field_names_survive(name):
+    # These are real tool arguments and request fields. Redacting them would
+    # destroy exactly the data a trace exists to show.
+    assert Redactor().scrub({name: "value"})[name] == "value"
+
+
+def test_env_var_names_use_the_broader_rule():
+    # An env var called TOKEN is a credential essentially always, so the
+    # header snapshot stays aggressive where a payload field is not.
+    from reeltime.core.redact import looks_secret, looks_secret_field
+
+    assert looks_secret("GITHUB_TOKEN") and not looks_secret_field("token")
+    assert looks_secret("SESSION_KEY") and not looks_secret_field("key")

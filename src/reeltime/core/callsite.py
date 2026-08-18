@@ -25,6 +25,7 @@ import contextlib
 import functools
 import os
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Dict, NamedTuple, Optional
 
@@ -41,6 +42,20 @@ _TRANSPARENT_FILES = frozenset(
 )
 
 _STDLIB_DIR = str(Path(os.__file__).resolve().parent)
+
+
+def _library_dirs() -> frozenset:
+    """Directories holding installed third-party code."""
+    found = set()
+    for key in ("purelib", "platlib"):
+        try:
+            found.add(str(Path(sysconfig.get_paths()[key]).resolve()))
+        except (KeyError, OSError):  # pragma: no cover - exotic layouts
+            continue
+    return frozenset(found)
+
+
+_LIBRARY_DIRS = _library_dirs()
 
 UNKNOWN = "<unknown>:0"
 
@@ -64,6 +79,11 @@ class CallSite(NamedTuple):
     @property
     def is_stdlib(self) -> bool:
         return _is_stdlib(self.filename)
+
+    @property
+    def is_library(self) -> bool:
+        """True for the standard library and for installed packages alike."""
+        return _is_library(self.filename)
 
 
 def _display(filename: str) -> str:
@@ -91,6 +111,15 @@ def _is_internal(filename: str) -> bool:
     return filename.startswith(_PACKAGE_ROOT) or filename in _TRANSPARENT_FILES
 
 
+def _is_library(filename: str) -> bool:
+    """True for installed third-party or standard-library code."""
+    if _is_stdlib(filename):
+        return True
+    if "site-packages" in filename or "dist-packages" in filename:
+        return True
+    return any(filename.startswith(directory) for directory in _LIBRARY_DIRS)
+
+
 def _qualname(frame) -> str:
     code = frame.f_code
     # co_qualname lands in 3.11; before that, reconstruct the common case of a
@@ -109,14 +138,33 @@ def _qualname(frame) -> str:
     return name
 
 
-def caller(depth: int = 1) -> CallSite:
-    """The nearest frame outside reeltime, starting ``depth`` frames up."""
+def caller(depth: int = 1, skip_libraries: bool = False) -> CallSite:
+    """The nearest frame outside reeltime, starting ``depth`` frames up.
+
+    With ``skip_libraries``, keep walking out through installed packages until
+    the caller's own code is reached. An HTTP event intercepted at the
+    transport layer is many frames below the agent -- through the OpenAI SDK,
+    httpx, and httpcore -- and blaming ``httpx/_client.py:1234`` for it would
+    make call-site matching worthless. The first frame that is neither
+    reeltime, nor the standard library, nor site-packages is the one the user
+    can actually go and look at.
+    """
     try:
         frame = sys._getframe(depth)
     except ValueError:  # pragma: no cover - stack shallower than depth
         return CallSite("<unknown>", 0, "<unknown>", "")
     while frame is not None and _is_internal(frame.f_code.co_filename):
         frame = frame.f_back
+
+    if skip_libraries:
+        candidate = frame
+        while candidate is not None and _is_library(candidate.f_code.co_filename):
+            candidate = candidate.f_back
+        # An agent that itself lives in site-packages has no such frame; the
+        # innermost library frame is a worse answer than none, but it is still
+        # a real location, so fall back to it rather than reporting nothing.
+        frame = candidate if candidate is not None else frame
+
     if frame is None:
         return CallSite("<unknown>", 0, "<unknown>", "")
     filename = frame.f_code.co_filename
