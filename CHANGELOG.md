@@ -3,7 +3,25 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — 2026-08-18
+## [0.1.1] — 2026-08-18
+
+First published release. `0.1.0` was built and rehearsed through TestPyPI but
+never published to PyPI.
+
+### Fixed
+
+- The demo GIF reported "2× faster than the recorded run" while the README
+  quoted ~80×. Both were true — the demo runs two events against an embedded
+  mock with almost no latency to skip — but side by side they made each other
+  look unreliable. `examples/truncation_bug.py` now states its conditions, and
+  the README attributes the ~80× to the benchmark that measures it.
+
+### Added
+
+- A run id is now optional on `tape replay` and `tape reindex`, and every
+  command accepts `last` (or `latest`, or `-`) for the most recent run.
+
+## [0.1.0] — 2026-08-18, unpublished
 
 First release. Recording and replay both work end to end.
 

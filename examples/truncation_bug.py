@@ -132,7 +132,16 @@ def main():
 
     print()
     print("Q2 is wrong: invoice.pdf IS in the listing.")
-    print("Run:  tape show <run> 1 --context --diff 0")
+    print("Run:  tape show last 1 --context --diff 0")
+    print()
+    # Without this the replay summary below ("2x faster") reads as a headline
+    # number, and quietly contradicts the ~80x the README quotes. Two events
+    # against a local mock have almost no latency to skip; the saving here is
+    # the interpreter's, not the network's.
+    print("note: mock provider, 2 events -- little latency to skip, so replay "
+          "saves ~1s here.")
+    print("      examples/m3_replay_speed.py measures ~80x on an 8-turn agent "
+          "at 400ms/call.")
     server.shutdown()
 
 
