@@ -72,8 +72,8 @@ def test_session_closes_the_trace_even_when_the_block_raises(tape_dir):
     assert tape.current() is None
 
 
-def test_unimplemented_modes_say_which_milestone(tape_dir):
-    with pytest.raises(TapeConfigError, match="milestone 5"):
+def test_fork_needs_a_run_and_a_point(tape_dir):
+    with pytest.raises(TapeConfigError, match="needs a run to fork"):
         tape.install("fork", tape_dir=tape_dir)
 
 

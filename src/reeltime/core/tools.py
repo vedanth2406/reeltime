@@ -74,6 +74,19 @@ def _rebuild_error(error: Dict[str, Any]) -> BaseException:
     return type(name, (ReplayedError,), {})(message)
 
 
+def _substitute(engine: Any, kind: str, name: str):
+    """Ask a fork whether a ``--patch`` replaces this call's result."""
+    if not getattr(engine, "forking", False):
+        return (False, None)
+    return engine.substitute(kind, name)
+
+
+def _record_substitute(engine: Any, request: Dict[str, Any], value: Any) -> Any:
+    """Record a patched result as a real event, without running anything."""
+    engine.record("tool", request, {"value": value}, meta={"patched": True})
+    return value
+
+
 def _replayed_result(engine: Any, event: Any) -> Any:
     error = event.meta.get("error")
     if error:
@@ -101,6 +114,9 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
                     # agent that deletes files or charges cards safe.
                     return _replayed_result(engine, event)
                 return await fn(*args, **kwargs)
+            substituted, value = _substitute(engine, "tool", tool_name)
+            if substituted:
+                return _record_substitute(engine, request, value)
             with engine.capture("tool", request) as event:
                 result = await fn(*args, **kwargs)
                 event.res = {"value": result}
@@ -120,6 +136,9 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
             if event is not None:
                 return _replayed_result(engine, event)
             return fn(*args, **kwargs)
+        substituted, value = _substitute(engine, "tool", tool_name)
+        if substituted:
+            return _record_substitute(engine, request, value)
         with engine.capture("tool", request) as event:
             result = fn(*args, **kwargs)
             event.res = {"value": result}

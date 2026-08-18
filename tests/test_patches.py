@@ -270,7 +270,17 @@ def test_nothing_is_recorded_after_uninstall(recording):
 
 # -- numpy ---------------------------------------------------------------
 
-numpy = pytest.importorskip("numpy")
+# Guard only the numpy tests. A module-level importorskip would silently take
+# the other two dozen tests in this file down with it.
+try:
+    import numpy
+except ImportError:  # pragma: no cover
+    numpy = None
+
+needs_numpy = pytest.mark.skipif(numpy is None, reason="numpy is not installed")
+
+
+@needs_numpy
 
 
 def test_numpy_draws_are_recorded(tape_dir):
@@ -285,6 +295,7 @@ def test_numpy_draws_are_recorded(tape_dir):
     assert event.res["value"]["shape"] == [3]
 
 
+@needs_numpy
 def test_numpy_scalars_serialise_as_plain_numbers(tape_dir):
     run = tape.install(tape_dir=tape_dir, collect_git=False)
     numpy.random.normal()
