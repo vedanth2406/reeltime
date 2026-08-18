@@ -238,3 +238,32 @@ def test_a_written_trace_can_be_decoded_afterwards(tape_dir, server):
     out = decoders.decode_resolved(event, run.blobs)
     assert out["kind"] == "llm"
     assert out["res"]["tokens"] == {"in": 3, "out": 4}
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        # Verified against the provider pricing pages on the date in
+        # pricing.CHECKED. These are the entries most likely to be wrong after
+        # a price change, so they are asserted rather than assumed.
+        ("gpt-4o-mini", (0.15, 0.60)),
+        ("gpt-5", (1.25, 10.00)),
+        ("gpt-5-mini", (0.25, 2.00)),
+        ("gpt-5.4-mini-2026-03-01", (0.75, 4.50)),
+        ("claude-opus-5", (5.00, 25.00)),
+        ("claude-opus-4-5-20251101", (5.00, 25.00)),
+        ("claude-opus-4-20250514", (15.00, 75.00)),
+        ("claude-sonnet-5", (2.00, 10.00)),
+        ("claude-haiku-4-5-20251001", (1.00, 5.00)),
+    ],
+)
+def test_verified_prices(model, expected):
+    assert pricing.lookup(model) == expected
+
+
+def test_a_more_specific_version_wins_over_its_family():
+    # gpt-5 is a prefix of gpt-5-mini and gpt-5.4; longest match must win or
+    # every newer model silently bills at the base model's rate.
+    assert pricing.lookup("gpt-5-nano") == (0.05, 0.40)
+    assert pricing.lookup("gpt-5.6-luna") == (0.20, 1.20)
+    assert pricing.lookup("claude-opus-4-8") != pricing.lookup("claude-opus-4")
