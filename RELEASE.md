@@ -1,9 +1,14 @@
 # Releasing reeltime
 
-Runbook for v0.1.0. **The order matters** — step 4 explains why.
+Runbook for v0.1.1. **The order matters** — step 4 explains why.
 
-Everything up to step 2 has already been done for v0.1.0: tests pass, the
-artifacts are built in `dist/`, and `twine check` passes. Pick up at step 3.
+Everything up to step 5 has been done for v0.1.1: tests pass, the GIF is
+recorded, the README points at its hosted URL, `dist/` is rebuilt, and
+`twine check` passes. Pick up at the TestPyPI re-upload in step 6.
+
+`0.1.0` was consumed on TestPyPI during the rehearsal and never published to
+PyPI, so `0.1.1` is the first public release. What gets verified on TestPyPI is
+then exactly what ships.
 
 ---
 
@@ -19,7 +24,7 @@ python examples/m3_replay_speed.py        # the numbers the README quotes
 Confirm the version is in exactly two places and they agree:
 
 ```bash
-grep -n '^version' pyproject.toml         # version = "0.1.0"
+grep -n '^version' pyproject.toml         # version = "0.1.1"
 grep -n '__version__' src/reeltime/__init__.py
 ```
 
@@ -36,7 +41,7 @@ nothing without it:
 
 ```bash
 python -c "import zipfile; print('reeltime/_bootstrap/sitecustomize.py' in \
-zipfile.ZipFile('dist/reeltime-0.1.0-py3-none-any.whl').namelist())"
+zipfile.ZipFile('dist/reeltime-0.1.1-py3-none-any.whl').namelist())"
 ```
 
 And that a clean install works from the wheel alone:
@@ -175,13 +180,13 @@ That last command is the whole product in one line. If it prints the
 python -m twine upload dist/*
 ```
 
-Irreversible in the ways that matter: the version number `0.1.0` can never be
+Irreversible in the ways that matter: the version number `0.1.1` can never be
 reused, and the rendered README is frozen at this moment. Deleting a release
 does not free the version.
 
 ```bash
-git tag -a v0.1.0 -m "reeltime 0.1.0" && git push origin v0.1.0
-gh release create v0.1.0 --title "reeltime 0.1.0" --notes-from-tag
+git tag -a v0.1.1 -m "reeltime 0.1.1" && git push origin v0.1.1
+gh release create v0.1.1 --title "reeltime 0.1.1" --notes-from-tag
 ```
 
 ## 8. After
@@ -198,12 +203,21 @@ uv venv /tmp/rt-live && VIRTUAL_ENV=/tmp/rt-live uv pip install reeltime openai
 - Bump `src/reeltime/__init__.py` and `pyproject.toml` to `0.2.0.dev0` so `main`
   is never mistaken for the released version.
 
+## A note on demo numbers
+
+`examples/truncation_bug.py` runs two events against an embedded mock, so its
+replay saves about a second and the summary reports ~2×. The README's ~80×
+comes from `examples/m3_replay_speed.py` at 400 ms per call. Both are true and
+they sit next to each other in the GIF, so the demo prints its own conditions.
+If you ever re-record with a different example, check the two numbers still
+agree with what the README claims.
+
 ## If something is wrong after publishing
 
-- **Broken README or GIF:** fix it, bump to `0.1.1`, upload again. There is no
+- **Broken README or GIF:** fix it, bump to `0.1.2`, upload again. There is no
   way to re-render an existing release.
-- **Broken code:** `twine upload` the fix as `0.1.1`, then
-  `pip download reeltime==0.1.0` to confirm what shipped, and yank the bad
+- **Broken code:** `twine upload` the fix as `0.1.2`, then
+  `pip download reeltime==0.1.1` to confirm what shipped, and yank the bad
   release from the PyPI web UI. Yanking hides it from resolvers without deleting
   it, so anyone who pinned it still resolves.
 - **Wrong name entirely:** the name is claimed for good. Pick another, and leave

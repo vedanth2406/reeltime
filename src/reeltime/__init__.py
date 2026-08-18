@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .core.spans import span
 from .core.tape import (

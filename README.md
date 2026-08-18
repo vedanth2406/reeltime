@@ -14,20 +14,26 @@ received.
 <summary>The same session as text</summary>
 
 ```console
-$ tape run python examples/truncation_bug.py
+$ tape run python truncation_bug.py
 Q1: is report_00.pdf there?  -> Yes — report_00.pdf is in the listing.
 Q2: is invoice.pdf there?    -> No, invoice.pdf is not in the listing.
 
-✓ recorded 2 events → .tape/runs/01M0AX2WWYENXS5QTPESGFVM25.jsonl  (1.3s, <$0.0001)
+Q2 is wrong: invoice.pdf IS in the listing.
+Run:  tape show last 1 --context --diff 0
 
-$ tape replay 01M0AX2W
+note: mock provider, 2 events -- little latency to skip, so replay saves ~1s here.
+      examples/m3_replay_speed.py measures ~80x on an 8-turn agent at 400ms/call.
+
+✓ recorded 2 events → .tape/runs/01M0B3V68D0THT474YMFV0R2SQ.jsonl  (1.5s, <$0.0001)
+
+$ tape replay
 Q1: is report_00.pdf there?  -> Yes — report_00.pdf is in the listing.
 Q2: is invoice.pdf there?    -> No, invoice.pdf is not in the listing.
 
-✓ replayed 2 events in 0.72s  ($0.00)
-  wall clock 1.04s including startup; the recorded run took 1.32s
+✓ replayed 2 events in 0.72s  ($0.00)  [2× faster than the recorded run]
+  wall clock 0.86s including startup; the recorded run took 1.51s
 
-$ tape show 01M0AX2W 1 --context --diff 0
+$ tape show last 1 --context --diff 0
 context diff · event 0 → event 1 · gpt-4o-mini
   3 messages, 866 chars  →  3 messages, 353 chars   (+0 messages, -513 chars)
 
@@ -53,6 +59,10 @@ context diff · event 0 → event 1 · gpt-4o-mini
 The model was never wrong. `invoice.pdf` had been truncated out of its context
 one line before the question that asked about it.
 
+(That demo runs against an embedded mock, so it has almost no latency to skip
+and replay only saves about a second. The ~80× figure below is measured on
+[a realistic agent](examples/m3_replay_speed.py) paying 400 ms per call.)
+
 ---
 
 ## The problem
@@ -62,9 +72,11 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
 
 ## What this does about it
 
-- **Replay is instant, offline, and free.** ~80× faster than the run it
-  replays, $0.00, zero network calls. That is what makes stepping and
-  scrubbing possible at all.
+- **Replay is instant, offline, and free.** $0.00 and zero network calls —
+  ~80× faster on an 8-turn agent paying 400 ms per call ([the
+  benchmark](examples/m3_replay_speed.py)), and the ratio grows with the
+  latency you were paying. That is what makes stepping and scrubbing possible
+  at all.
 - **Streaming is recorded and replayed chunk by chunk**, boundaries byte-exact,
   with `--realtime` to reinstate the recorded gaps. Every other tool in this
   space refuses streaming outright.
