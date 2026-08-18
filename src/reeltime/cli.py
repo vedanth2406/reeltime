@@ -39,10 +39,19 @@ def _tape_dir(args: argparse.Namespace) -> Path:
     return Path(args.tape_dir) if args.tape_dir else find_tape_dir()
 
 
-def _resolve_run(tape_dir: Path, prefix: str) -> Path:
+#: Stands for the most recent run wherever a run id is accepted. No ULID can
+#: collide with it, so it is unambiguous as a positional argument.
+LATEST = ("last", "latest", "-")
+
+
+def _resolve_run(tape_dir: Path, prefix: Optional[str]) -> Path:
+    """Locate a run by id, by unambiguous prefix, or by being the latest one."""
     available = paths.list_run_ids(tape_dir)
     if not available:
         raise TapeError("no runs recorded in {}".format(paths.display_path(tape_dir)))
+    if not prefix or prefix.lower() in LATEST:
+        # list_run_ids sorts oldest first, and ULIDs sort chronologically.
+        return paths.trace_path(tape_dir, available[-1])
     return paths.trace_path(tape_dir, ids.resolve_prefix(prefix, available))
 
 
@@ -416,7 +425,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=cmd_run)
 
     replay = sub.add_parser("replay", help="re-run a recorded command offline")
-    replay.add_argument("run", help="run id, or any unambiguous prefix")
+    replay.add_argument("run", nargs="?", default="last",
+                        help="run id, prefix, or 'last' (the default)")
     replay.add_argument("--to", type=int, metavar="N",
                         help="stop after event N")
     replay.add_argument("--step", action="store_true",
@@ -432,7 +442,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     reindex_cmd = sub.add_parser(
         "reindex", help="re-run the provider decoders over an existing run")
-    reindex_cmd.add_argument("run", help="run id, or any unambiguous prefix")
+    reindex_cmd.add_argument("run", nargs="?", default="last",
+                             help="run id, prefix, or 'last' (the default)")
     reindex_cmd.add_argument("--dry-run", action="store_true",
                              help="report what would change without writing")
     reindex_cmd.set_defaults(func=cmd_reindex)
@@ -443,7 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
     ls.set_defaults(func=cmd_ls)
 
     show = sub.add_parser("show", help="inspect a run, or one event in it")
-    show.add_argument("run", help="run id, or any unambiguous prefix")
+    show.add_argument("run", help="run id, prefix, or 'last' for the most recent")
     show.add_argument("index", nargs="?", type=int, help="event index")
     show.add_argument("--json", action="store_true")
     show.add_argument("--raw", action="store_true",

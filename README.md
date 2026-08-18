@@ -8,9 +8,10 @@ received.
 [![Python](https://img.shields.io/pypi/pyversions/reeltime.svg)](https://pypi.org/project/reeltime/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-<!-- Replace this block with the GIF once the repo is pushed:
-     vhs demo.tape  →  ![demo](https://raw.githubusercontent.com/vedanth2406/reeltime/main/demo.gif)
-     See RELEASE.md for the ordering — PyPI snapshots this file at upload. -->
+![reeltime: record an agent, replay it offline, and see what the model actually read](https://raw.githubusercontent.com/vedanth2406/reeltime/main/demo.gif)
+
+<details open>
+<summary>The same session as text</summary>
 
 ```console
 $ tape run python examples/truncation_bug.py
@@ -46,6 +47,8 @@ context diff · event 0 → event 1 · gpt-4o-mini
 
 2 changed · 1 unchanged
 ```
+
+</details>
 
 The model was never wrong. `invoice.pdf` had been truncated out of its context
 one line before the question that asked about it.

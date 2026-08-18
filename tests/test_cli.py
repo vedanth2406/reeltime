@@ -417,3 +417,38 @@ def test_reindex_dry_run_says_it_wrote_nothing(tape_dir, server, capsys):
     out = capsys.readouterr().out
     assert "would enrich" in out and "nothing written" in out
     assert run.path.read_text() == before
+
+
+# -- the `last` alias ----------------------------------------------------
+
+
+def test_last_resolves_to_the_most_recent_run(recorded, tape_dir, capsys):
+    for name in ("last", "latest", "-"):
+        assert run_cli("--tape-dir", str(tape_dir), "show", name) == 0
+        assert "01BBBBB" in capsys.readouterr().out    # the newer of the two
+
+
+def test_replay_defaults_to_the_last_run(recorded_script, capfd):
+    tape_dir, _ = recorded_script
+    capfd.readouterr()
+    assert run_cli("--tape-dir", str(tape_dir), "replay") == 0
+    assert "replayed 6 events" in capfd.readouterr().err
+
+
+def test_reindex_defaults_to_the_last_run(tape_dir, server, capsys):
+    import httpx
+
+    url = server.route("/v1/chat/completions", json={
+        "object": "chat.completion", "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+    with tape.session(tape_dir=tape_dir, collect_git=False, decode=False,
+                      run_id="01ONLY"):
+        httpx.post(url, json={"model": "gpt-4o-mini", "messages": []})
+
+    assert run_cli("--tape-dir", str(tape_dir), "reindex") == 0
+    assert "01ONLY" in capsys.readouterr().out
+
+
+def test_last_on_an_empty_directory_still_says_no_runs(tmp_path, capsys):
+    assert run_cli("--tape-dir", str(tmp_path / ".tape"), "show", "last") == 1
+    assert "no runs recorded" in capsys.readouterr().err
