@@ -18,22 +18,26 @@ from __future__ import annotations
 import atexit
 import enum
 import os
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from ..errors import TapeConfigError, TapeStateError
+from ..errors import StopReplay, TapeConfigError, TapeStateError
 from . import fmt, ids, paths, spans
 from .blobs import BlobStore
 from .config import Config
 from .decoders import decode as decode_event
 from .http import HttpShim
+from .matching import DEFAULT as DEFAULT_STRICTNESS
+from .matching import STRICTNESSES
 from .patches import AmbientPatcher
+from .player import Player, ReplaySummary
 from .recorder import Recorder
 from .redact import DEFAULT_PATTERNS, Redactor
-from .trace import Event, Header, build_header
+from .trace import Event, Header, build_header, read_trace
 from .writer import TraceWriter
 
 
@@ -80,39 +84,54 @@ class RunSummary:
 
 
 class Tape:
-    """A live recording (or, from M3, replay) session."""
+    """A live recording or replay session."""
 
     def __init__(
         self,
         mode: Mode,
         run_id: str,
         config: Config,
-        header: Header,
-        recorder: Recorder,
+        header: Optional[Header],
+        engine: Any,
         patcher: Optional[AmbientPatcher],
-        path: Path,
+        path: Optional[Path],
         http: Optional[HttpShim] = None,
     ) -> None:
         self.mode = mode
         self.run_id = run_id
         self.config = config
         self.header = header
-        self.recorder = recorder
+        #: Recorder while recording, Player while replaying. Both answer
+        #: ``.replaying``, which is all the interception layer needs to know.
+        self.engine = engine
         self.patcher = patcher
         self.http = http
         self.path = path
         self.closed = False
-        self.summary: Optional[RunSummary] = None
+        self.summary: Optional[Any] = None
+        self.restore_excepthook: Optional[Any] = None
+
+    @property
+    def replaying(self) -> bool:
+        return bool(getattr(self.engine, "replaying", False))
+
+    @property
+    def recorder(self) -> Optional[Recorder]:
+        return None if self.replaying else self.engine
+
+    @property
+    def player(self) -> Optional[Player]:
+        return self.engine if self.replaying else None
 
     # -- convenience -----------------------------------------------------
 
     @property
     def blobs(self) -> BlobStore:
-        return self.recorder.blobs
+        return self.engine.blobs
 
     @property
     def redactor(self) -> Redactor:
-        return self.recorder.redactor
+        return self.engine.redactor
 
     def record(
         self,
@@ -121,30 +140,39 @@ class Tape:
         res: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Optional[Event]:
-        return self.recorder.record(kind, req, res, **kwargs)
+        if self.replaying:
+            raise TapeStateError("cannot record while replaying run {}".format(self.run_id))
+        return self.engine.record(kind, req, res, **kwargs)
 
     @contextmanager
     def paused(self) -> Iterator[None]:
         """Stop recording for the duration of the block (setup, teardown…)."""
-        was = self.recorder.enabled
-        self.recorder.enabled = False
+        was = self.engine.enabled
+        self.engine.enabled = False
         try:
             yield
         finally:
-            self.recorder.enabled = was
+            self.engine.enabled = was
 
     # -- teardown --------------------------------------------------------
 
-    def close(self, exit_code: Optional[int] = None) -> RunSummary:
+    def close(self, exit_code: Optional[int] = None) -> Any:
         if self.closed:
-            return self.summary  # type: ignore[return-value]
+            return self.summary
         self.closed = True
         if self.patcher is not None:
             self.patcher.uninstall()
         intercepted = list(self.http.installed) if self.http is not None else []
         if self.http is not None:
             self.http.uninstall()
-        footer = self.recorder.close(exit_code, intercepted=intercepted)
+
+        if self.restore_excepthook is not None:
+            self.restore_excepthook()
+        if self.replaying:
+            self.summary = self.engine.close(exit_code)
+            return self.summary
+
+        footer = self.engine.close(exit_code, intercepted=intercepted)
         self.summary = RunSummary(
             run_id=self.run_id,
             path=self.path,
@@ -164,9 +192,9 @@ class Tape:
         uninstall()
 
     def __repr__(self) -> str:
-        return "<Tape {} mode={} events={}>".format(
-            self.run_id, self.mode.value, self.recorder.stats.events
-        )
+        count = (self.engine.consumed if self.replaying
+                 else self.engine.stats.events)
+        return "<Tape {} mode={} events={}>".format(self.run_id, self.mode.value, count)
 
 
 # -- process state -------------------------------------------------------
@@ -204,14 +232,20 @@ def install(
     run_id: Optional[str] = None,
     tape_dir: Optional[os.PathLike] = None,
     argv: Optional[Sequence[str]] = None,
+    replay: Optional[str] = None,
+    strictness: str = DEFAULT_STRICTNESS,
+    stop_at: Optional[int] = None,
+    realtime: bool = False,
+    stepper: Optional[Any] = None,
     **config_overrides: Any,
 ) -> Tape:
-    """Start recording. Patches the ambient nondeterminism sources.
+    """Start recording, or start replaying.
 
     ::
 
         import reeltime as tape
-        tape.install()
+        tape.install()                         # record
+        tape.install("replay", replay="01M09")  # replay that run
 
     Returns the :class:`Tape`, which is also reachable via
     :func:`reeltime.current`. Call :func:`reeltime.uninstall` to stop; an
@@ -234,14 +268,19 @@ def install(
                 mode, ", ".join(m.value for m in Mode)
             )
         )
-    if resolved_mode in (Mode.REPLAY, Mode.FORK):
+    if resolved_mode is Mode.FORK:
         raise TapeConfigError(
-            "mode {!r} is not implemented yet -- replay lands in milestone 3".format(
-                resolved_mode.value
-            )
+            "mode 'fork' is not implemented yet -- fork lands in milestone 5"
         )
 
     config = Config.resolve(tape_dir=tape_dir, **config_overrides)
+
+    if resolved_mode is Mode.REPLAY:
+        return _install_player(
+            config, replay, strictness=strictness, stop_at=stop_at,
+            realtime=realtime, stepper=stepper,
+        )
+
     paths.ensure_tape_dir(config.tape_dir)
 
     run = run_id or ids.new_run_id()
@@ -292,6 +331,86 @@ def install(
     return tape
 
 
+def _install_player(
+    config: Config,
+    replay: Optional[str],
+    *,
+    strictness: str,
+    stop_at: Optional[int],
+    realtime: bool,
+    stepper: Optional[Any],
+) -> Tape:
+    """Load a trace and hand its events to a re-running agent."""
+    global _global
+
+    if not replay:
+        raise TapeConfigError("replay mode needs a run to replay: install('replay', replay=...)")
+    if strictness not in STRICTNESSES:
+        raise TapeConfigError(
+            "unknown strictness {!r}; expected one of {}".format(
+                strictness, ", ".join(STRICTNESSES))
+        )
+
+    available = paths.list_run_ids(config.tape_dir)
+    if not available:
+        raise TapeConfigError(
+            "no runs to replay in {}".format(paths.display_path(config.tape_dir))
+        )
+    run = ids.resolve_prefix(replay, available)
+    trace = read_trace(paths.trace_path(config.tape_dir, run))
+
+    redactor = Redactor(DEFAULT_PATTERNS)
+    for pattern in config.redact:
+        redactor.add(pattern, "config")
+    for pattern, label in _extra_patterns:
+        redactor.add(pattern, label)
+
+    player = Player(
+        trace,
+        BlobStore(paths.blobs_dir(config.tape_dir), config.blob_threshold),
+        redactor,
+        strictness=strictness,
+        stop_at=stop_at,
+        realtime=realtime,
+        record_library_ambient=config.record_library_ambient,
+        stepper=stepper,
+    )
+
+    patcher = AmbientPatcher(player, config.patch).install() if config.patch else None
+    http = HttpShim(player).install() if config.http else None
+
+    tape = Tape(Mode.REPLAY, run, config, trace.header, player, patcher, trace.path, http)
+    tape.restore_excepthook = _install_stop_excepthook()
+    _global = tape
+    spans.reset()
+    atexit.register(_close_at_exit)
+    return tape
+
+
+def _install_stop_excepthook():
+    """Make ``--to N`` end the run quietly instead of with a traceback.
+
+    ``StopReplay`` is raised through the agent's own stack, which is the only
+    way to stop a program mid-flight. Letting it print a traceback would make a
+    deliberate stop look like a crash.
+    """
+    original = sys.excepthook
+
+    def hook(exc_type, exc, tb):
+        if issubclass(exc_type, StopReplay):
+            sys.stderr.write("\n⏹  {}\n".format(exc))
+            return
+        original(exc_type, exc, tb)
+
+    sys.excepthook = hook
+
+    def restore():
+        if sys.excepthook is hook:
+            sys.excepthook = original
+
+    return restore
+
+
 def uninstall(exit_code: Optional[int] = None) -> Optional[RunSummary]:
     """Stop recording, restore every patch, and finish the trace."""
     global _global
@@ -306,6 +425,10 @@ def uninstall(exit_code: Optional[int] = None) -> Optional[RunSummary]:
         atexit.unregister(_close_at_exit)
     except Exception:  # pragma: no cover - defensive
         pass
+    if os.environ.get("REELTIME_ANNOUNCE") and summary is not None:
+        sys.stderr.write("\n✓ {}\n".format(summary.line()))
+        for note in summary.notes() if hasattr(summary, "notes") else ():
+            sys.stderr.write("  {}\n".format(note))
     return summary
 
 

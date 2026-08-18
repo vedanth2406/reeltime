@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 
 from .. import _originals, callsite
 from ..recorder import Recorder, boundary, in_boundary
-from . import common
+from . import common, replay as replay_support
 
 
 def _request_payload(recorder: Recorder, request: Any) -> Dict[str, Any]:
@@ -41,11 +41,34 @@ def _request_payload(recorder: Recorder, request: Any) -> Dict[str, Any]:
     }
 
 
+def _replayed_response(engine: Any, event: Any, request: Any) -> Any:
+    """Rebuild a ``requests.Response`` from the tape, without a socket."""
+    import requests
+    from requests.structures import CaseInsensitiveDict
+    from requests.utils import get_encoding_from_headers
+
+    error = replay_support.recorded_error(event, requests.exceptions)
+    if error is not None:
+        raise error
+
+    res = engine.resolved(event, event.res) or {}
+    response = requests.Response()
+    response.status_code = res.get("status", 200)
+    response.headers = CaseInsensitiveDict(dict(replay_support.response_headers(res)))
+    response.encoding = get_encoding_from_headers(response.headers)
+    response._content = common.decode_body(res.get("body"))
+    response._content_consumed = True
+    response.url = request.url
+    response.request = request
+    response.reason = ""
+    return response
+
+
 class RequestsShim:
     """Patches ``requests.adapters.HTTPAdapter.send``."""
 
-    def __init__(self, recorder: Recorder) -> None:
-        self.recorder = recorder
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
         self._restores: List = []
 
     def install(self) -> bool:
@@ -54,7 +77,7 @@ class RequestsShim:
         except ImportError:
             return False
 
-        recorder = self.recorder
+        recorder = self.engine
         original = HTTPAdapter.send
 
         def send(adapter, request, **kwargs):
@@ -63,6 +86,12 @@ class RequestsShim:
 
             started = _originals.perf_counter()
             site = callsite.caller(1, skip_libraries=True)
+            if recorder.replaying:
+                event = recorder.consume(
+                    "http", _request_payload(recorder, request), site=site)
+                if event is not None:
+                    return _replayed_response(recorder, event, request)
+                return original(adapter, request, **kwargs)
             payload = _request_payload(recorder, request)
             try:
                 with boundary():

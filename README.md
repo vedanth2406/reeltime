@@ -4,10 +4,9 @@
 nondeterminism during a run, then replay the run exactly — offline, instantly,
 for free.
 
-> **Status: milestone 2 of 10.** Recording works end to end — HTTP (streaming
-> included), local tools, and ambient nondeterminism — with `tape run`,
-> `tape ls`, and `tape show`. Replay (`tape replay`) is milestone 3. See
-> [Roadmap](#roadmap). Not on PyPI yet.
+> **Status: milestone 3 of 10 — replay works.** Record an agent, then re-run it
+> offline, instantly, for free. Next is `--context` inspection and the first
+> PyPI release. See [Roadmap](#roadmap). Not on PyPI yet.
 
 ---
 
@@ -62,6 +61,10 @@ $ tape show 01M09G
    2  http      31ms  tools.py:12    GET https://api.weather.com/v1 → 200
 
 $ tape show 01M09G 1        # the whole event, blobs resolved
+
+$ tape replay 01M09G
+✓ replayed 47 events in 0.54s  ($0.00)
+  wall clock 0.54s vs 43.20s recorded (80× faster, $0.00)
 ```
 
 `tape run` needs no import in your code: it injects a `sitecustomize` on
@@ -115,8 +118,73 @@ process did not exit cleanly.
 | `uuid.uuid1/uuid4` | module-level patch | **M1 ✅** |
 | `time.time/monotonic/perf_counter` (+ `_ns`) | module-level patch | **M1 ✅** |
 | anything you pass to `record_event()` | explicit | **M1 ✅** |
+| …and all of the above replays offline | three-tier matcher | **M3 ✅** |
 | `datetime.now/utcnow/today` | subclass swap | **opt-in** — see below |
 | MCP `tools/list` and `tools/call` | client wrapper | M5.5 |
+
+## Replay
+
+```bash
+tape replay <run>              # re-run the recorded command against the tape
+tape replay <run> --to 14      # stop after event 14
+tape replay <run> --step       # pause before each event
+tape replay <run> --strict     # only exact matches
+tape replay <run> --loose      # also match on content hash alone
+tape replay <run> --realtime   # re-emit stream chunks with their recorded gaps
+```
+
+Replay makes **no network calls**, costs **$0.00**, and returns the same random
+draws, uuids, and clock readings the recorded run saw. A replayed `@tape.tool`
+never executes its body — which is what makes replaying an agent that deletes
+files or charges cards safe.
+
+Measured on the included benchmark (`python examples/m3_replay_speed.py`), an
+8-turn agent with 400 ms of latency per call:
+
+| | wall clock | cost |
+|---|---|---|
+| record | 3.39 s | $0.0015 |
+| replay | 0.04 s | $0.00 |
+
+**~80× faster**, and the ratio grows with the latency you were paying.
+Recording adds about **2 ms per HTTP event** and 20–30 µs per ambient read.
+
+### The three-tier matcher
+
+Index matching breaks the moment you edit your code; content-hash matching
+breaks the moment you change a prompt by one character — which is the edit you
+make while debugging. So identity and content are separated:
+
+| Tier | Rule | Result |
+|---|---|---|
+| 1 | same call site, same sequence number there, same content hash | silent |
+| 2 | the line moved (qualname still matches), or the content differs | **matched**, reported as drift |
+| 3 | call site gone entirely, content hash matches an unconsumed event | matched, warned |
+
+`--strict` accepts tier 1, the default accepts 1–2, `--loose` accepts all three.
+Tier 2 is the one that matters: it is what lets you tweak a prompt and replay
+anyway, seeing what changes downstream.
+
+Nothing ever falls through to a live call. If a call cannot be matched, replay
+stops with a `TapeMiss` that names the call site and says why each nearby
+recording was rejected:
+
+```
+no recorded tool event matches this call
+
+  at        agent.py:91  (in Planner.step)
+  span      root/plan
+  sent      {"args":{"path":"b.txt"},"name":"delete_file"}
+
+  nearest unconsumed events, and why each was rejected:
+    #14   tool  agent.py:88                same call site, content differs — would match without --strict
+    #22   tool  tools.py:12                same kind and span, different call site
+
+  matching is 'strict'. Drop --strict to allow drifted content, or re-record.
+```
+
+Every drifted or fuzzy match is reported at the end of the run. A match nobody
+mentions is the silent divergence this tool exists to prevent.
 
 ## Design notes
 
@@ -215,6 +283,14 @@ Being precise about the boundary is the point.
 - **Streamed `requests` responses.** Reading one to record it would consume the
   caller's stream, so the event is marked `stream_not_captured` rather than
   recording a body nobody saw. Streamed *httpx* responses are captured in full.
+- **Whitespace in JSON bodies.** A parsed JSON body is stored as JSON, not as
+  the exact bytes. Keys and values survive; formatting does not. Keeping the
+  original bytes meant keeping a base64 copy that redaction could not scrub,
+  which is a poor trade for whitespace no JSON parser can see.
+- **Binary request and response bodies** are stored as base64 and cannot be
+  scanned for secrets. Text and JSON bodies are scrubbed in full.
+- **Same-span concurrent calls** replay in recorded order. Put concurrent work
+  in separate `tape.span()`s and the order stops mattering.
 - **`numpy.random.default_rng()` generators.** Same reasoning; only the legacy
   global functions are patched, and only if numpy was imported before
   `install()`.
@@ -233,8 +309,8 @@ Being precise about the boundary is the point.
 |---|---|---|
 | 1 | Trace format, blob store, recorder, ambient patches | ✅ |
 | 2 | httpx shim, provider decoders, `@tape.tool`, streaming capture, `tape run/ls/show` | ✅ |
-| 3 | Player, three-tier matcher, `TapeMiss`, `tape replay`, streaming re-emission | next |
-| 4 | `--context` inspection, `tape reindex`, README, PyPI publish | |
+| 3 | Player, three-tier matcher, `TapeMiss`, `tape replay`, streaming re-emission | ✅ |
+| 4 | `--context` inspection, `tape reindex`, README, PyPI publish | next |
 | 5 | `tape fork` with patch grammar | |
 | 5.5 | MCP adapter | |
 | 6 | `tape diff`, divergence-point reporting | |

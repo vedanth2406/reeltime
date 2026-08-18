@@ -44,7 +44,14 @@ from .core.tape import (
 )
 from .core.tools import is_wrapped, tool, wrap, wrap_all
 from .core.trace import KINDS, Event, Header, Trace, read_trace
-from .errors import TapeConfigError, TapeError, TapeMiss, TapeStateError
+from .errors import (
+    ReplayedError,
+    StopReplay,
+    TapeConfigError,
+    TapeError,
+    TapeMiss,
+    TapeStateError,
+)
 
 __all__ = [
     "__version__",
@@ -70,6 +77,8 @@ __all__ = [
     "KINDS",
     "TapeError",
     "TapeMiss",
+    "StopReplay",
+    "ReplayedError",
     "TapeConfigError",
     "TapeStateError",
 ]
@@ -96,11 +105,36 @@ def record_event(
     return tape.record(kind, req, res, **kwargs)
 
 
-if os.environ.get("REELTIME_AUTOINSTALL"):
-    # Set by `tape run`, which also injects a sitecustomize so this happens at
-    # interpreter startup -- before the agent imports httpx or anything else.
-    try:
+def _autoinstall_from_env() -> None:
+    """Start recording or replaying from environment configuration.
+
+    Set up by ``tape run`` and ``tape replay``, which inject a sitecustomize so
+    this happens at interpreter startup -- before the agent imports httpx or
+    anything else.
+    """
+    mode = os.environ.get("REELTIME_MODE", "record")
+    if mode != "replay":
         install(run_id=os.environ.get("REELTIME_RUN_ID") or None)
+        return
+
+    stop_at = os.environ.get("REELTIME_STOP_AT")
+    stepper = None
+    if os.environ.get("REELTIME_STEP"):
+        from .core.stepper import interactive as stepper
+
+    install(
+        "replay",
+        replay=os.environ.get("REELTIME_REPLAY"),
+        strictness=os.environ.get("REELTIME_STRICTNESS", "default"),
+        stop_at=int(stop_at) if stop_at else None,
+        realtime=bool(os.environ.get("REELTIME_REALTIME")),
+        stepper=stepper,
+    )
+
+
+if os.environ.get("REELTIME_AUTOINSTALL"):
+    try:
+        _autoinstall_from_env()
     except Exception as _exc:  # pragma: no cover - never break a user's import
         import warnings
 

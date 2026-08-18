@@ -232,3 +232,82 @@ def test_cost_formatting(amount, shown):
     from reeltime.core import fmt
 
     assert fmt.usd(amount) == shown
+
+
+# -- replay --------------------------------------------------------------
+
+
+@pytest.fixture
+def recorded_script(tmp_path, capfd):
+    """A script recorded through `tape run`, ready to replay.
+
+    Depends on capfd so that fd-level capture is active before the recording
+    subprocess runs; otherwise the replay tests have nothing to compare to.
+    """
+    script = tmp_path / "agent.py"
+    script.write_text(textwrap.dedent("""
+        import random, uuid
+        for i in range(3):
+            print("step", i, round(random.random(), 6), uuid.uuid4())
+    """))
+    tape_dir = tmp_path / ".tape"
+    assert run_cli("--tape-dir", str(tape_dir), "run", sys.executable, str(script)) == 0
+    return tape_dir, script
+
+
+def test_replay_reruns_the_recorded_command(recorded_script, capfd):
+    tape_dir, _ = recorded_script
+    original = capfd.readouterr().out
+
+    run_id = paths.list_run_ids(tape_dir)[0]
+    assert run_cli("--tape-dir", str(tape_dir), "replay", run_id[:8]) == 0
+
+    captured = capfd.readouterr()
+    # Same output, from the tape.
+    assert captured.out == original
+    assert "replayed 6 events" in captured.err
+    assert "wall clock" in captured.err
+
+
+def test_replay_to_stops_early(recorded_script, capfd):
+    tape_dir, _ = recorded_script
+    capfd.readouterr()
+    run_id = paths.list_run_ids(tape_dir)[0]
+
+    run_cli("--tape-dir", str(tape_dir), "replay", run_id[:8], "--to", "1")
+    captured = capfd.readouterr()
+    assert "stopped after event 1" in captured.err
+    assert captured.out.count("step") == 1
+
+
+def test_replay_strict_rejects_a_changed_script(recorded_script, capfd):
+    tape_dir, script = recorded_script
+    capfd.readouterr()
+    # A cosmetic edit: one more line above the calls, nothing else.
+    script.write_text("# a new comment\n" + script.read_text())
+
+    run_id = paths.list_run_ids(tape_dir)[0]
+    code = run_cli("--tape-dir", str(tape_dir), "replay", run_id[:8], "--strict")
+    assert code != 0
+    assert "TapeMiss" in capfd.readouterr().err
+
+
+def test_replay_default_survives_the_same_edit(recorded_script, capfd):
+    tape_dir, script = recorded_script
+    original = capfd.readouterr().out
+    script.write_text("# a new comment\n" + script.read_text())
+
+    run_id = paths.list_run_ids(tape_dir)[0]
+    assert run_cli("--tape-dir", str(tape_dir), "replay", run_id[:8]) == 0
+
+    captured = capfd.readouterr()
+    assert captured.out == original          # identical values, edited source
+    assert "matched with drifted content" in captured.err
+
+
+def test_replay_needs_a_recorded_command(tape_dir, capsys):
+    with tape.session(tape_dir=tape_dir, collect_git=False, run_id="01NOARGV",
+                      argv=[]) as run:
+        tape.record_event("tool", {"name": "t"})
+    assert run_cli("--tape-dir", str(tape_dir), "replay", "01NOARGV") == 1
+    assert "nothing to re-run" in capsys.readouterr().err

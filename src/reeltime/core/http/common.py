@@ -1,16 +1,26 @@
 """Turning wire bytes into trace payloads, and back.
 
-Bodies are recorded in the most readable form that still reconstructs the
-original bytes:
+Bodies are recorded in the most readable form available:
 
-* JSON that parses      -> ``{"json": {...}}``, plus ``raw`` when a compact
-  re-encode would not reproduce the exact bytes
+* JSON that parses      -> ``{"json": {...}}``
 * other valid UTF-8     -> ``{"text": "..."}``
 * anything else         -> ``{"raw": "<base64>"}``
 
 Readability is not a luxury here. The trace is JSONL so that ``grep`` works on
 it, and a request body stored as one base64 blob would make the format useless
 for the thing people actually do with a trace, which is search it.
+
+**A parsed JSON body is stored only as JSON, never alongside a base64 copy of
+the original bytes.** An earlier version kept both, so that a body whose
+encoder spaced its JSON differently could be reproduced byte for byte. That was
+a redaction hole: the scrubber rewrites the parsed view, and a secret sitting in
+the base64 copy sails past every regex it owns. Since the only consumer of a
+recorded body is a JSON parser, key order (preserved) matters and whitespace
+does not, so the exact bytes were never worth a hole in the one guarantee that
+makes traces shareable.
+
+A binary body still becomes base64 and still cannot be scanned. That is a
+narrow, documented limit rather than a silent one.
 """
 
 from __future__ import annotations
@@ -62,11 +72,8 @@ def encode_body(data: Optional[bytes]) -> Dict[str, Any]:
         except ValueError:
             parsed = None
         if parsed is not None:
+            # Deliberately no base64 copy alongside: see the module docstring.
             out["json"] = parsed
-            # Keep the exact bytes only when we could not rebuild them, which
-            # is the common case: every SDK spaces its JSON differently.
-            if _compact(parsed) != data:
-                out["raw"] = base64.b64encode(data).decode("ascii")
             return out
 
     out["text"] = text
@@ -88,26 +95,40 @@ def decode_body(payload: Optional[Mapping[str, Any]]) -> bytes:
     return b""
 
 
-def encode_chunks(chunks: Sequence[bytes]) -> Dict[str, Any]:
+def encode_chunks(
+    chunks: Sequence[bytes], offsets: Optional[Sequence[float]] = None
+) -> Dict[str, Any]:
     """Record a stream as its ordered chunk list, boundaries intact.
 
     Text chunks stay text so the trace remains greppable; a stream with any
     non-UTF-8 chunk falls back to base64 for the whole list rather than mixing
     representations, which would make the ordering ambiguous to read.
+
+    ``offsets`` are milliseconds from the start of the request to the arrival
+    of each chunk. They are what ``tape replay --realtime`` re-emits, which is
+    how you reproduce a bug in code that cancels early or barges in.
     """
+    payload: Dict[str, Any] = {"size": sum(len(chunk) for chunk in chunks)}
     try:
-        text_chunks = [chunk.decode("utf-8") for chunk in chunks]
+        payload["encoding"] = "utf-8"
+        payload["chunks"] = [chunk.decode("utf-8") for chunk in chunks]
     except UnicodeDecodeError:
-        return {
-            "encoding": "base64",
-            "chunks": [base64.b64encode(chunk).decode("ascii") for chunk in chunks],
-            "size": sum(len(chunk) for chunk in chunks),
-        }
-    return {
-        "encoding": "utf-8",
-        "chunks": text_chunks,
-        "size": sum(len(chunk) for chunk in chunks),
-    }
+        payload["encoding"] = "base64"
+        payload["chunks"] = [base64.b64encode(chunk).decode("ascii") for chunk in chunks]
+    if offsets:
+        payload["offsets"] = [round(value, 3) for value in offsets]
+    return payload
+
+
+def chunk_delays(payload: Optional[Mapping[str, Any]]) -> List[float]:
+    """Seconds to wait before each chunk, derived from recorded offsets."""
+    offsets = (payload or {}).get("offsets") or []
+    delays: List[float] = []
+    previous = 0.0
+    for offset in offsets:
+        delays.append(max(0.0, (offset - previous) / 1000.0))
+        previous = offset
+    return delays
 
 
 def decode_chunks(payload: Optional[Mapping[str, Any]]) -> List[bytes]:

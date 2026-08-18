@@ -131,20 +131,57 @@ def _permutation(before: Sequence[Any], after: Sequence[Any]) -> List[int]:
     return order
 
 
+def _restore_value(event: Any) -> Any:
+    """The recorded value, rebuilt into the type the caller expects.
+
+    Only numpy needs work: everything else round-trips through JSON as itself.
+    """
+    value = (event.res or {}).get("value")
+    if isinstance(value, dict) and "__ndarray__" in value:
+        numpy = sys.modules.get("numpy")
+        if numpy is not None:
+            return numpy.array(value["__ndarray__"], dtype=value.get("dtype"))
+    return value
+
+
 class AmbientPatcher:
-    """Installs and removes the ambient patches for one run."""
+    """Installs and removes the ambient patches for one run.
+
+    The same wrappers serve recording and replay. On replay each one asks the
+    player for the recorded value instead of producing a fresh one, so the
+    agent sees the identical random draw, uuid, and clock reading it saw
+    originally.
+    """
 
     def __init__(
         self,
-        recorder: Recorder,
+        engine: Any,
         groups: Sequence[str] = GROUPS,
     ) -> None:
-        self.recorder = recorder
+        self.engine = engine
         self.groups = tuple(groups)
         self._saved: List[Tuple[Any, str, Any]] = []
         self.installed = False
         #: Groups that were requested but not applicable, e.g. numpy absent.
         self.skipped: List[str] = []
+
+    def _cross(self, kind, req, produce, restore=_restore_value, capture=None):
+        """Cross one ambient boundary, recording or replaying as appropriate.
+
+        Returning None from ``consume`` means this read is not ours to serve --
+        a library reading its own clock -- so it runs live in both directions,
+        which is exactly what recording did with it.
+        """
+        engine = self.engine
+        if engine.replaying:
+            event = engine.consume(kind, req, ambient=True)
+            if event is not None:
+                return restore(event)
+            return produce()
+        value = produce()
+        engine.record(kind, req, (capture or (lambda v: {"value": v}))(value),
+                      ambient=True)
+        return value
 
     # -- patch bookkeeping ----------------------------------------------
 
@@ -195,35 +232,38 @@ class AmbientPatcher:
             self._set(_random, "shuffle", self._wrap_shuffle(shuffle))
 
     def _wrap_random(self, name: str, original):
-        recorder = self.recorder
-
         @functools.wraps(original)
         def wrapper(*args, **kwargs):
-            value = original(*args, **kwargs)
-            recorder.record(
+            return self._cross(
                 "rand",
                 {"name": name, "args": list(args), "kwargs": kwargs},
-                {"value": value},
-                ambient=True,
+                lambda: original(*args, **kwargs),
             )
-            return value
 
         return wrapper
 
     def _wrap_shuffle(self, original):
-        recorder = self.recorder
-
         @functools.wraps(original)
         def wrapper(seq, *args, **kwargs):
             before = list(seq)
-            result = original(seq, *args, **kwargs)
-            recorder.record(
-                "rand",
-                {"name": "shuffle", "n": len(before)},
-                {"perm": _permutation(before, seq)},
-                ambient=True,
+
+            def produce():
+                original(seq, *args, **kwargs)
+                return None
+
+            def restore(event):
+                # Replay the permutation rather than the elements: applying the
+                # recorded index mapping reproduces the shuffle on whatever
+                # list this call was handed.
+                order = (event.res or {}).get("perm") or []
+                if len(order) == len(before):
+                    seq[:] = [before[i] for i in order]
+                return None
+
+            return self._cross(
+                "rand", {"name": "shuffle", "n": len(before)}, produce, restore,
+                capture=lambda _value: {"perm": _permutation(before, seq)},
             )
-            return result
 
         return wrapper
 
@@ -238,18 +278,15 @@ class AmbientPatcher:
             self._set(_uuid, name, self._wrap_uuid(name, original))
 
     def _wrap_uuid(self, name: str, original):
-        recorder = self.recorder
-
         @functools.wraps(original)
         def wrapper(*args, **kwargs):
-            value = original(*args, **kwargs)
-            recorder.record(
+            return self._cross(
                 "uuid",
                 {"name": name},
-                {"value": str(value)},
-                ambient=True,
+                lambda: original(*args, **kwargs),
+                restore=lambda event: _uuid.UUID((event.res or {}).get("value")),
+                capture=lambda value: {"value": str(value)},
             )
-            return value
 
         return wrapper
 
@@ -265,26 +302,20 @@ class AmbientPatcher:
             self._set(_time, name, self._wrap_time(name, original))
 
     def _wrap_time(self, name: str, original):
-        recorder = self.recorder
-
         @functools.wraps(original)
         def wrapper():
-            value = original()
-            recorder.record(
-                "time",
-                {"name": "time.{}".format(name)},
-                {"value": value},
-                ambient=True,
-            )
-            return value
+            return self._cross("time", {"name": "time.{}".format(name)}, original)
 
         return wrapper
 
     # -- datetime --------------------------------------------------------
 
     def _patch_datetime(self) -> None:
-        recorder = self.recorder
+        cross = self._cross
         real = _datetime.datetime
+
+        def restore(event):
+            return real.fromisoformat((event.res or {}).get("value"))
 
         class _RecordingMeta(type):
             # Keeps isinstance/issubclass answering about the real class, so
@@ -314,36 +345,25 @@ class AmbientPatcher:
 
             @classmethod
             def now(cls, tz=None):
-                value = real.now(tz)
-                recorder.record(
-                    "time",
-                    {"name": "datetime.now", "tz": str(tz) if tz else None},
-                    {"value": value.isoformat()},
-                    ambient=True,
+                return cross(
+                    "time", {"name": "datetime.now", "tz": str(tz) if tz else None},
+                    lambda: real.now(tz), restore,
+                    capture=lambda value: {"value": value.isoformat()},
                 )
-                return value
 
             @classmethod
             def utcnow(cls):
-                value = real.utcnow()
-                recorder.record(
-                    "time",
-                    {"name": "datetime.utcnow"},
-                    {"value": value.isoformat()},
-                    ambient=True,
+                return cross(
+                    "time", {"name": "datetime.utcnow"}, real.utcnow, restore,
+                    capture=lambda value: {"value": value.isoformat()},
                 )
-                return value
 
             @classmethod
             def today(cls):
-                value = real.today()
-                recorder.record(
-                    "time",
-                    {"name": "datetime.today"},
-                    {"value": value.isoformat()},
-                    ambient=True,
+                return cross(
+                    "time", {"name": "datetime.today"}, real.today, restore,
+                    capture=lambda value: {"value": value.isoformat()},
                 )
-                return value
 
         RecordingDateTime.__name__ = "datetime"
         RecordingDateTime.__qualname__ = "datetime"
@@ -375,17 +395,13 @@ class AmbientPatcher:
         return True
 
     def _wrap_numpy(self, name: str, original):
-        recorder = self.recorder
-
         @functools.wraps(original)
         def wrapper(*args, **kwargs):
-            value = original(*args, **kwargs)
-            recorder.record(
+            return self._cross(
                 "rand",
-                {"name": "numpy.random.{}".format(name), "args": list(args), "kwargs": kwargs},
-                {"value": value},
-                ambient=True,
+                {"name": "numpy.random.{}".format(name),
+                 "args": list(args), "kwargs": kwargs},
+                lambda: original(*args, **kwargs),
             )
-            return value
 
         return wrapper

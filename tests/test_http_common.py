@@ -17,32 +17,40 @@ from reeltime.core.http import common
     "data",
     [
         b"",
-        b'{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}',
-        b'{ "spaced" : "json" , "n" : 1 }',
         "unicode: ✓ ± é".encode("utf-8"),
         b"plain text, not json",
-        b"[1, 2, 3]",
         bytes(range(256)),
         b'{"truncated": ',
-        json.dumps({"deep": {"nest": [1, {"a": None}]}}).encode(),
     ],
 )
-def test_bodies_round_trip_byte_for_byte(data):
+def test_non_json_bodies_round_trip_byte_for_byte(data):
     assert common.decode_body(common.encode_body(data)) == data
 
 
-def test_compact_json_needs_no_raw_copy():
-    data = b'{"a":1,"b":2}'
-    encoded = common.encode_body(data)
-    assert encoded["json"] == {"a": 1, "b": 2}
-    assert "raw" not in encoded  # rebuildable, so no second copy is stored
+@pytest.mark.parametrize(
+    "data",
+    [
+        b'{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}',
+        b'{ "spaced" : "json" , "n" : 1 }',
+        b"[1, 2, 3]",
+        json.dumps({"deep": {"nest": [1, {"a": None}]}}).encode(),
+    ],
+)
+def test_json_bodies_round_trip_semantically(data):
+    # Whitespace is not preserved, deliberately: keeping the exact bytes meant
+    # keeping an unscrubbable copy of them. Key order and values survive, which
+    # is everything a JSON parser can observe.
+    rebuilt = common.decode_body(common.encode_body(data))
+    assert json.loads(rebuilt) == json.loads(data)
+    assert list(json.loads(rebuilt)) == list(json.loads(data))
 
 
-def test_spaced_json_keeps_the_exact_bytes_too():
-    data = b'{"a": 1, "b": 2}'
-    encoded = common.encode_body(data)
-    assert encoded["json"] == {"a": 1, "b": 2}   # readable
-    assert base64.b64decode(encoded["raw"]) == data   # and exact
+def test_a_json_body_is_never_stored_as_base64_as_well():
+    # The redaction hole this closes: the scrubber rewrites the parsed view,
+    # and a secret in a base64 copy would sail past every pattern it owns.
+    encoded = common.encode_body(b'{"key": "sk-verySecretValueHere1234567890"}')
+    assert "raw" not in encoded
+    assert set(encoded) == {"json", "size"}
 
 
 def test_binary_bodies_are_base64():

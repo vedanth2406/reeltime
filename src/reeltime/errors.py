@@ -21,6 +21,28 @@ class TapeStateError(TapeError):
     """An operation was attempted in the wrong mode or at the wrong time."""
 
 
+class ReplayedError(TapeError):
+    """Stands in for a recorded exception whose class cannot be imported.
+
+    Used only when the original type is not a builtin and not reachable from
+    the module it came from. The name and message are preserved so the agent's
+    own error handling still has something to look at.
+    """
+
+
+class StopReplay(BaseException):
+    """Raised inside the agent to end a ``--to N`` replay.
+
+    Deliberately not an :class:`Exception`: agent code is full of broad
+    ``except Exception`` handlers, and a stepper that can be swallowed by the
+    program it is stepping through is useless.
+    """
+
+    def __init__(self, stopped_at: int) -> None:
+        self.stopped_at = stopped_at
+        super().__init__("replay stopped after event {}".format(stopped_at))
+
+
 class TapeMiss(TapeError):
     """Replay could not match a call against the recorded trace.
 
@@ -34,35 +56,62 @@ class TapeMiss(TapeError):
         site: str,
         *,
         span: str = "root",
+        qual: Optional[str] = None,
         preview: str = "",
         candidates: Optional[Sequence[Any]] = None,
         strictness: str = "default",
+        remaining: int = 0,
+        run_id: str = "",
     ) -> None:
         self.kind = kind
         self.site = site
         self.span = span
+        self.qual = qual
         self.preview = preview
+        #: Objects with a ``line()`` method, or plain strings.
         self.candidates: List[Any] = list(candidates or [])
         self.strictness = strictness
+        self.remaining = remaining
+        self.run_id = run_id
         super().__init__(self._message())
 
     def _message(self) -> str:
+        where = self.site
+        if self.qual:
+            function = self.qual.split("::")[-1]
+            where = "{}  (in {})".format(self.site, function)
+
         lines = [
             "no recorded {} event matches this call".format(self.kind),
-            "  at        {}".format(self.site),
+            "",
+            "  at        {}".format(where),
             "  span      {}".format(self.span),
         ]
         if self.preview:
-            lines.append("  content   {}".format(self.preview))
+            lines.append("  sent      {}".format(self.preview))
+        lines.append("")
+
         if self.candidates:
-            lines.append("  nearest unconsumed events:")
-            for cand in self.candidates[:5]:
-                lines.append("    {}".format(cand))
-        else:
-            lines.append("  (no unconsumed events of this kind remain)")
-        lines.append(
-            "  matching is '{}'; try --loose, or re-record if the code changed".format(
-                self.strictness
+            lines.append("  nearest unconsumed events, and why each was rejected:")
+            for candidate in self.candidates:
+                text = candidate.line() if hasattr(candidate, "line") else str(candidate)
+                lines.append("    {}".format(text))
+        elif self.remaining:
+            lines.append(
+                "  {} recorded event(s) remain, none of them a {}.".format(
+                    self.remaining, self.kind
+                )
             )
-        )
+        else:
+            lines.append("  the tape is fully consumed: the agent made more calls "
+                         "than were recorded.")
+        lines.append("")
+        lines.append("  matching is '{}'. {}".format(self.strictness, self._advice()))
         return "\n".join(lines)
+
+    def _advice(self) -> str:
+        if self.strictness == "strict":
+            return "Drop --strict to allow drifted content, or re-record."
+        if self.strictness == "default":
+            return "Try --loose to match on content alone, or re-record."
+        return "Even --loose found nothing; the code has changed materially. Re-record."
