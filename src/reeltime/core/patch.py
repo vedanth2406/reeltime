@@ -11,14 +11,14 @@ Grammar, deliberately small -- anything it cannot express is what ``--edit`` is
 for::
 
     patch  := kind ("." name)? "." field op value
-    kind   := llm | tool | http
+    kind   := llm | tool | http | mcp
     op     := "="   replace
             | "+="  append to a string, add to a number
             | "~="  regex substitution, written /pattern/replacement/
     value  := JSON when it parses as JSON, otherwise a bare string
 
 ``name`` selects which boundary the patch applies to when the kind alone is
-ambiguous -- for tools it is the tool's name.
+ambiguous -- for tools and MCP calls it is the tool's name.
 
 Supported fields, by kind:
 
@@ -32,15 +32,30 @@ llm     temperature, top_p,           request parameters
         max_tokens, seed
 llm     response                      substitute the completion; no live
                                       call is made
+tool    args                          call the tool with different arguments
 tool    result                        substitute the return value; the tool
                                       body does not run
+mcp     args                          call the MCP tool with different
+                                      arguments
+mcp     result                        substitute the MCP result; no call is
+                                      made
 http    url                           rewrite the request URL
 http    body                          replace the request body (JSON)
+http    body_response                 substitute the response body; no live
+                                      call is made
 ======  ============================  ====================================
 
-Fields that substitute a *result* (``llm.response``, ``tool.result``) stop the
-boundary from executing at all. Every other field rewrites the request on its
-way out, and the call still happens live.
+Fields that substitute a *result* (``llm.response``, ``tool.result``,
+``mcp.result``, ``http.body_response``) stop the boundary from executing at
+all. Every other field rewrites the request on its way out, and the call still
+happens live.
+
+**Every field in that table is applied somewhere, and there is a test that
+fails if one stops being.** ``tool.args`` was declared here for two releases
+without any code reading it, which is worse than not offering it: a patch that
+parses, reports itself as applied, and changes nothing sends you looking for
+the bug in your agent. :func:`reeltime.core.patch.declared_fields` enumerates
+the grammar so ``tests/test_patch_effects.py`` can require a live case for each.
 """
 
 from __future__ import annotations
@@ -58,18 +73,21 @@ KINDS = ("llm", "tool", "http", "mcp")
 REQUEST_FIELDS = {
     "llm": ("model", "system", "temperature", "top_p", "max_tokens", "seed"),
     "tool": ("args",),
+    "mcp": ("args",),
     "http": ("url", "body"),
 }
 RESULT_FIELDS = {
     "llm": ("response",),
     "tool": ("result",),
     "http": ("body_response",),
-    # An MCP call is a tool call over a wire, so it patches like one. There is
-    # deliberately no request field: rewriting an outgoing body is an HTTP-shaped
-    # operation, and `mcp.read_file.args=` would have to be either implemented
-    # or silently ignored -- so it is rejected instead.
+    # An MCP call is a tool call over a wire, so it patches like one.
     "mcp": ("result",),
 }
+
+#: Fields whose value is a whole document rather than a scalar. Appending to
+#: one or running a regex over one is not defined, and used to be accepted at
+#: the prompt and then silently ignored during the fork.
+WHOLE_DOCUMENT_FIELDS = ("body", "args")
 
 OPERATORS = ("+=", "~=", "=")
 
@@ -219,10 +237,38 @@ def parse(expression: str) -> Patch:
         )
     if op == "~=" and field in RESULT_FIELDS.get(kind, ()) + ("model",):
         pass  # regex on a result or a model name is unusual but legal
+    if field in WHOLE_DOCUMENT_FIELDS and op != "=":
+        # Rejected here rather than at fork time: `+=` on a JSON object has no
+        # meaning, and the old code quietly returned the body unchanged, so the
+        # fork ran and reported the patch as applied while changing nothing.
+        raise TapeConfigError(
+            "patch {!r}: {}.{} is a whole document, so it only supports '=' "
+            "(not {!r}). Patch a field inside it, or use --edit.".format(
+                text, kind, field, op)
+        )
 
     return Patch(kind=kind, field=field, op=op,
                  value=_parse_value(match.group("value"), op, text),
                  name=name, source=text)
+
+
+def declared_fields() -> List[Tuple[str, str]]:
+    """Every ``(kind, field)`` the grammar accepts, in table order.
+
+    Exists so a test can assert that each one actually does something. A field
+    can be added to the tables above and to the docs, and still reach nobody --
+    which is how ``tool.args`` sat in the grammar unread for two releases.
+    """
+    pairs: List[Tuple[str, str]] = []
+    for kind in KINDS:
+        for field in tuple(REQUEST_FIELDS.get(kind, ())) + tuple(RESULT_FIELDS.get(kind, ())):
+            pairs.append((kind, field))
+    return pairs
+
+
+def apply_to_args(patch: Patch, args: Any) -> Any:
+    """Apply an ``args`` patch to a tool or MCP call's argument mapping."""
+    return patch.apply(args)
 
 
 def parse_all(expressions: Sequence[str]) -> List[Patch]:
@@ -268,7 +314,8 @@ def apply_to_body(patch: Patch, body: Dict[str, Any]) -> Dict[str, Any]:
         return body
 
     if patch.field == "body":
-        return patch.apply(body) if patch.op == "=" else body
+        # Parsing guarantees `=` here; see WHOLE_DOCUMENT_FIELDS.
+        return patch.apply(body)
 
     body[patch.field] = patch.apply(body.get(patch.field))
     return body

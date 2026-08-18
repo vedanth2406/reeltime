@@ -35,8 +35,29 @@ All notable changes to this project are documented here. This project follows
   stdio, no credentials and no network, driven by the test suite. Recording it
   twice with `MCP_EXAMPLE_TOOLS=extended` and diffing the two runs is the
   changed-tool-set report end to end.
+- **`--patch tool.<name>.args` and `mcp.<tool>.args`** now call the boundary
+  with different arguments, and the event records the call that was actually
+  made. `tool.args` had been in the grammar since 0.2.0 with nothing reading
+  it: it parsed, the fork ran, the footer reported it as applied, and the tool
+  was called with the original arguments.
+- **Every field the patch grammar accepts now has a test proving it reaches
+  its boundary**, plus a test that fails if a field is added to the grammar
+  without one, and a test that fails if a field is missing from either
+  documentation table. `tests/test_patch_effects.py`.
 
 ### Fixed
+
+- **`--patch http.url` rewrote nothing.** It fell through to the generic
+  body-field path and wrote a `url` key *into* the JSON request body, leaving
+  the request pointed where it already was. It now rewrites the outgoing URL.
+- **`http.body` and `.args` accepted `+=` and `~=` and then ignored them.** A
+  whole JSON document has no meaningful append or regex substitution, so those
+  are now refused when the expression is parsed — before a fork runs, which is
+  where every other patch mistake is already caught.
+- **A fork's footer never reached disk.** `forked_from`, `fork_at`, and the
+  list of applied patches were added to the footer dict *after* it had been
+  written, so a fork's trace did not record what was patched to produce it.
+  (The header carried the lineage, so only the patch list was lost outright.)
 
 - An MCP server started over stdio no longer inherits the recording
   environment. It is a subprocess of a recorded agent, so `REELTIME_RUN_ID`

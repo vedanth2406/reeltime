@@ -22,30 +22,51 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Any, Callable, Dict, Mapping, Optional, TypeVar
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, TypeVar
 
-from ..errors import ReplayedError
+from ..errors import ReplayedError, TapeConfigError
 from .tape import current
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def _bind(fn: Callable[..., Any], args: tuple, kwargs: dict) -> Dict[str, Any]:
-    """Arguments as a name -> value mapping.
+def _bind(fn: Callable[..., Any], args: tuple, kwargs: dict) -> Tuple[Dict[str, Any], bool]:
+    """Arguments as a name -> value mapping, and whether binding worked.
 
     Positional and keyword calls of the same function have to produce the same
     recorded shape, or the M3 matcher would treat ``read_file("a.txt")`` and
     ``read_file(path="a.txt")`` as different calls.
+
+    The flag matters for ``--patch tool.<name>.args``: a patched mapping can
+    only be turned back into a call when the names came from the signature. An
+    unbindable callable (a builtin, say) records a positional fallback, and
+    that shape is not a keyword call.
     """
     try:
         bound = inspect.signature(fn).bind_partial(*args, **kwargs)
         bound.apply_defaults()
         values = dict(bound.arguments)
     except (TypeError, ValueError):
-        return {"args": list(args), "kwargs": dict(kwargs)}
+        return {"args": list(args), "kwargs": dict(kwargs)}, False
     values.pop("self", None)
     values.pop("cls", None)
-    return values
+    return values, True
+
+
+def _patched_args(engine: Any, name: str, bound: Dict[str, Any], bindable: bool):
+    """``(args, kwargs, patched)`` for a call a fork may have rewritten."""
+    if not getattr(engine, "forking", False):
+        return None
+    patched = engine.rewrite_args("tool", name, bound)
+    if patched == bound:
+        return None
+    if not bindable:
+        raise TapeConfigError(
+            "cannot apply --patch tool.{}.args: {!r}'s arguments could not be "
+            "bound to its signature, so they were recorded positionally and "
+            "there is no way to call it back with names".format(name, name)
+        )
+    return patched
 
 
 def _engine():
@@ -106,7 +127,8 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
             engine = _engine()
             if engine is None:
                 return await fn(*args, **kwargs)
-            request = {"name": tool_name, "args": _bind(fn, args, kwargs)}
+            bound, bindable = _bind(fn, args, kwargs)
+            request = {"name": tool_name, "args": bound}
             if engine.replaying:
                 event = engine.consume("tool", request)
                 if event is not None:
@@ -117,6 +139,9 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
             substituted, value = _substitute(engine, "tool", tool_name)
             if substituted:
                 return _record_substitute(engine, request, value)
+            patched = _patched_args(engine, tool_name, bound, bindable)
+            if patched is not None:
+                args, kwargs, request = (), patched, {"name": tool_name, "args": patched}
             with engine.capture("tool", request) as event:
                 result = await fn(*args, **kwargs)
                 event.res = {"value": result}
@@ -130,7 +155,8 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
         engine = _engine()
         if engine is None:
             return fn(*args, **kwargs)
-        request = {"name": tool_name, "args": _bind(fn, args, kwargs)}
+        bound, bindable = _bind(fn, args, kwargs)
+        request = {"name": tool_name, "args": bound}
         if engine.replaying:
             event = engine.consume("tool", request)
             if event is not None:
@@ -139,6 +165,11 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
         substituted, value = _substitute(engine, "tool", tool_name)
         if substituted:
             return _record_substitute(engine, request, value)
+        patched = _patched_args(engine, tool_name, bound, bindable)
+        if patched is not None:
+            # Recorded as the call that was actually made, not the one the
+            # agent asked for -- the trace has to describe what happened.
+            args, kwargs, request = (), patched, {"name": tool_name, "args": patched}
         with engine.capture("tool", request) as event:
             result = fn(*args, **kwargs)
             event.res = {"value": result}

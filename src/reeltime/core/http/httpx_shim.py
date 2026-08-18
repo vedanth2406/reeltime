@@ -47,22 +47,29 @@ def _fork_rewrite(engine: Any, httpx: Any, request: Any):
     if substituted:
         return request, value
 
+    # The URL is not in the body, so it is rewritten on the request itself.
+    # Routing it through apply_to_body was the old behaviour and it wrote a
+    # `url` key *into* the JSON instead -- a documented field that changed
+    # nothing anyone could see.
+    url = engine.rewrite_url("llm", str(request.url))
+
     try:
         original = json.loads(request.content.decode("utf-8"))
     except Exception:
-        return request, None
-    if not isinstance(original, dict):
-        return request, None
+        original = None
+    patched = original
+    if isinstance(original, dict):
+        patched = engine.rewrite_body("llm", original)
 
-    patched = engine.rewrite_body("llm", original)
-    if patched == original:
+    if patched == original and url == str(request.url):
         return request, None
 
     headers = [(k, v) for k, v in request.headers.raw
                if k.lower() not in (b"content-length", b"transfer-encoding")]
+    content = (json.dumps(patched).encode("utf-8")
+               if isinstance(patched, dict) else request.content)
     return (
-        httpx.Request(request.method, request.url, headers=headers,
-                      content=json.dumps(patched).encode("utf-8"),
+        httpx.Request(request.method, url, headers=headers, content=content,
                       extensions=request.extensions),
         None,
     )

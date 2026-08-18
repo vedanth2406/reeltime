@@ -219,6 +219,13 @@ def _substitute(engine: Any, name: str):
     return engine.substitute("mcp", name)
 
 
+def _patched_args(engine: Any, name: str, arguments: Any) -> Any:
+    """``--patch mcp.<tool>.args`` -- the call still goes to the server."""
+    if not getattr(engine, "forking", False):
+        return arguments
+    return engine.rewrite_args("mcp", name, arguments)
+
+
 class TapedSession:
     """An MCP client session whose calls are recorded, or served from a tape.
 
@@ -335,6 +342,9 @@ class TapedSession:
                     "isError": False}
             engine.record("mcp", request, call_result(wire), meta={"patched": True})
             return _from_wire("CallToolResult", wire)
+
+        arguments = _patched_args(engine, name, arguments)
+        request = call_request(self.server, name, arguments)
 
         with engine.capture("mcp", request) as cap:
             result = await self._require_live("call_tool").call_tool(

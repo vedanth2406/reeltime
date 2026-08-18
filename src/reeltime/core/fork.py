@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 
 from ..errors import TapeConfigError
 from .fmt import usd
-from .patch import Patch, apply_to_body
+from .patch import Patch, apply_to_args, apply_to_body
 from .player import Player
 from .recorder import Recorder
 from .trace import Event, Trace
@@ -250,11 +250,35 @@ class ForkEngine:
         if edited is not None:
             body = edited
         for patch in self._pending(kind, name):
-            if patch.substitutes_result:
+            # `url` is not in the body; rewrite_url handles it on the request.
+            if patch.substitutes_result or patch.field in ("url", "args"):
                 continue
             body = apply_to_body(patch, body)
             self._spend(patch)
         return body
+
+    def rewrite_args(self, kind: str, name: Optional[str], args: Any) -> Any:
+        """Apply an ``args`` patch to a tool or MCP call before it runs.
+
+        The boundary still executes -- that is the difference from
+        ``.result=``, which replaces the answer without making the call. This
+        one asks what the agent would have done had it passed something else.
+        """
+        for patch in self._pending(kind, name):
+            if patch.substitutes_result or patch.field != "args":
+                continue
+            args = apply_to_args(patch, args)
+            self._spend(patch)
+        return args
+
+    def rewrite_url(self, kind: str, url: Any, name: Optional[str] = None) -> Any:
+        """Apply a ``url`` patch to an outgoing request."""
+        for patch in self._pending(kind, name):
+            if patch.substitutes_result or patch.field != "url":
+                continue
+            url = patch.apply(url)
+            self._spend(patch)
+        return url
 
     def _edited_body(self) -> Optional[Dict[str, Any]]:
         """The request body from ``--edit``, once."""
@@ -281,11 +305,15 @@ class ForkEngine:
         :attr:`summary` for anyone who wants the fork-shaped view.
         """
         self.player.enabled = False
-        footer = self.recorder.close(exit_code, **kwargs)
-        footer["forked_from"] = self.player.trace.run_id
-        footer["fork_at"] = self.fork_at
+        extra: Dict[str, Any] = {
+            "forked_from": self.player.trace.run_id,
+            "fork_at": self.fork_at,
+        }
         if self.applied:
-            footer["patched"] = list(self.applied)
+            # What a fork actually did to its parent, in the trace rather than
+            # only on the terminal it scrolled past on.
+            extra["patched"] = list(self.applied)
+        footer = self.recorder.close(exit_code, extra=extra, **kwargs)
         self.summary = ForkSummary(
             run_id=self.recorder.writer.path.stem,
             parent=self.player.trace.run_id,

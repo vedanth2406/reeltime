@@ -345,15 +345,23 @@ class Recorder:
         exit_code: Optional[int] = None,
         *,
         intercepted: Optional[Sequence[str]] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Write the footer and close the file. Returns the footer.
 
         ``intercepted`` lists the HTTP backends that were actually patched. It
         answers "why was my call not recorded?" without a second run.
+
+        ``extra`` is for fields a caller wraps this in -- a fork's lineage and
+        the patches it applied. It has to arrive *here*, before the footer is
+        written: adding keys to the returned dict afterwards changes nothing on
+        disk, which is what a fork used to do with its own patch list.
         """
         footer: Dict[str, Any] = self.stats.to_dict()
         if intercepted is not None:
             footer["intercepted"] = list(intercepted)
+        if extra:
+            footer.update(extra)
         footer["dur_s"] = round(self.elapsed, 3)
         footer["exit"] = exit_code
         redacted = self.redactor.hits

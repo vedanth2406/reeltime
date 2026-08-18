@@ -266,6 +266,7 @@ tape fork <run> --at 13
 tape fork <run> --at 13 --patch 'llm.model=claude-sonnet-4-5'
 tape fork <run> --at 13 --patch 'llm.system+="Ask before destructive actions."'
 tape fork <run> --at 7  --patch 'tool.read_file.result="<empty file>"'
+tape fork <run> --at 7  --patch 'tool.read_file.args={"path": "b.txt"}'
 tape fork <run> --at 13 --edit          # open $EDITOR on the event first
 ```
 
@@ -308,14 +309,25 @@ JSON when they are JSON, and as a bare string otherwise — so
 | `llm` | `system` | the system prompt, wherever the provider keeps it |
 | `llm` | `temperature`, `top_p`, `max_tokens`, `seed` | request parameters |
 | `llm` | `response` | substitute the completion; **no live call is made** |
+| `tool` | `args` | call the tool with different arguments; the body still runs |
 | `tool` | `result` | substitute the return value; **the body does not run** |
-| `http` | `url`, `body` | rewrite the request |
+| `mcp` | `args` | call the MCP tool with different arguments |
+| `mcp` | `result` | substitute the MCP result; **no call is made** |
+| `http` | `url` | rewrite the request URL |
+| `http` | `body` | replace the request body (JSON) |
+| `http` | `body_response` | substitute the response body; **no live call is made** |
 
 `llm.system` finds the system prompt whichever way the provider carries it —
 Anthropic's top-level `system` field or OpenAI's first `role: system` message —
 so one expression works against both. Fields that substitute a *result* stop the
 boundary executing at all; everything else rewrites the request and the call
 still happens.
+
+`body` and `args` are whole documents, so they take `=` only — `+=` on a JSON
+object has no meaning, and accepting it and then ignoring it is how
+`tool.args` spent two releases doing nothing. Every field in that table has a
+test asserting it reaches its boundary, and a test asserting the table and the
+grammar still agree.
 
 Anything the grammar cannot express is what `--edit` is for: it opens `$EDITOR`
 on the event at the fork point and uses the request body you save. An empty
