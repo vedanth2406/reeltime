@@ -97,8 +97,43 @@ def test_clock_reads_are_recorded(recording):
     assert events[1].res["value"] == mono
 
 
+@pytest.fixture
+def recording_with_datetime(tape_dir):
+    """A tape with the opt-in datetime patch enabled."""
+    run = tape.install(
+        tape_dir=tape_dir,
+        collect_git=False,
+        patch=("random", "uuid", "time", "datetime"),
+    )
+    try:
+        yield run
+    finally:
+        if not run.closed:
+            tape.uninstall()
+
+
+def test_datetime_is_not_patched_by_default(recording):
+    # Patching it makes the real datetime class unrecognisable to pydantic v2,
+    # which is severe enough that the group is opt-in. See patches.py.
+    before = datetime.datetime
+    datetime.datetime.now()
+    tape.uninstall()
+    assert datetime.datetime is before
+    assert kinds_in(recording) == []
+
+
+def test_pydantic_models_still_build_under_the_default_patches(recording):
+    pydantic = pytest.importorskip("pydantic")
+
+    class Reply(pydantic.BaseModel):
+        at: datetime.datetime
+
+    assert Reply(at="2026-08-17T12:00:00").at.year == 2026
+
+
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-def test_datetime_now_is_recorded(recording):
+def test_datetime_now_is_recorded_when_opted_in(recording_with_datetime):
+    recording = recording_with_datetime
     now = datetime.datetime.now()
     utc = datetime.datetime.utcnow()
     tape.uninstall()
@@ -109,13 +144,13 @@ def test_datetime_now_is_recorded(recording):
     assert events[1].res["value"] == utc.isoformat()
 
 
-def test_timezone_aware_now_is_recorded_with_its_tz(recording):
+def test_timezone_aware_now_is_recorded_with_its_tz(recording_with_datetime):
     datetime.datetime.now(datetime.timezone.utc)
     tape.uninstall()
-    assert events_in(recording)[0].req["tz"] == "UTC"
+    assert events_in(recording_with_datetime)[0].req["tz"] == "UTC"
 
 
-def test_patched_datetime_still_passes_isinstance(recording):
+def test_patched_datetime_still_passes_isinstance(recording_with_datetime):
     now = datetime.datetime.now()
     assert isinstance(now, datetime.datetime)
     # Arithmetic on a datetime returns the *base* C type, so without the
@@ -126,7 +161,18 @@ def test_patched_datetime_still_passes_isinstance(recording):
     assert issubclass(type(later), datetime.datetime)
 
 
-def test_datetime_keeps_working_normally(recording):
+def test_patched_datetime_is_a_datetime_to_pydantic(recording_with_datetime):
+    # Repairs annotations that resolve to the patched class. Annotations
+    # holding the pre-patch class cannot be repaired -- hence opt-in.
+    pydantic = pytest.importorskip("pydantic")
+
+    class Reply(pydantic.BaseModel):
+        at: datetime.datetime
+
+    assert Reply(at="2026-08-17T12:00:00").at.year == 2026
+
+
+def test_datetime_keeps_working_normally(recording_with_datetime):
     parsed = datetime.datetime.fromisoformat("2026-08-17T12:00:00")
     assert parsed.year == 2026
     assert parsed.strftime("%Y") == "2026"
@@ -144,8 +190,26 @@ def test_the_runtimes_own_clock_reads_are_ignored(recording):
     assert kinds_in(recording) == []
 
 
-def test_stdlib_reads_can_be_opted_into(tape_dir):
-    run = tape.install(tape_dir=tape_dir, collect_git=False, record_stdlib_ambient=True)
+def test_an_installed_librarys_clock_reads_are_ignored(tape_dir):
+    # httpx reads perf_counter() twice per request from site-packages, which
+    # is not stdlib -- the filter has to cover installed packages too.
+    import httpx
+
+    run = tape.install(tape_dir=tape_dir, collect_git=False, http=False)
+    try:
+        httpx.Timeout(5.0)
+        with httpx.Client() as client:
+            try:
+                client.get("http://127.0.0.1:1/nope", timeout=0.05)
+            except Exception:
+                pass
+    finally:
+        tape.uninstall()
+    assert "time" not in kinds_in(run)
+
+
+def test_library_reads_can_be_opted_into(tape_dir):
+    run = tape.install(tape_dir=tape_dir, collect_git=False, record_library_ambient=True)
     logging.getLogger("reeltime-test").warning("hello")
     tape.uninstall()
     assert "time" in kinds_in(run)
@@ -163,7 +227,11 @@ def test_uninstall_restores_every_patched_attribute(tape_dir):
         "monotonic": time.monotonic,
         "datetime": datetime.datetime,
     }
-    tape.install(tape_dir=tape_dir, collect_git=False)
+    tape.install(
+        tape_dir=tape_dir,
+        collect_git=False,
+        patch=("random", "uuid", "time", "datetime", "numpy"),
+    )
     assert random.random is not originals["random"]
     assert datetime.datetime is not originals["datetime"]
     tape.uninstall()

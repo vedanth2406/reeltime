@@ -7,18 +7,28 @@ One instance per run. The pipeline for every event is:
 3. externalise oversized fields into the blob store
 4. write
 
-Reentrancy is guarded per-thread. A user object whose ``__repr__`` calls
-``time.time()`` would otherwise re-enter the recorder from inside step 2 while
-it is serialising that very object.
+Two separate per-thread guards sit on top of that pipeline.
+
+``is_busy`` is reentrancy: a user object whose ``__repr__`` calls ``time.time()``
+would otherwise re-enter the recorder from inside step 2 while it is serialising
+that very object.
+
+``in_boundary`` is nesting: **the outermost boundary is the one recorded.** An
+HTTP call made inside a ``@tape.tool`` body is not recorded separately, and
+neither are random draws or clock reads made there. This is not an optimisation
+-- on replay the tool's result is served from the tape and its body never runs,
+so anything recorded inside it could never be matched, and unmatchable events
+are exactly the silent-divergence failure the design forbids.
 """
 
 from __future__ import annotations
 
 import itertools
+import logging
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional, Sequence
 
 from . import _originals, callsite, spans
 from .blobs import BlobStore
@@ -26,6 +36,8 @@ from .redact import Redactor
 from .serial import to_jsonable
 from .trace import Event
 from .writer import TraceWriter
+
+logger = logging.getLogger("reeltime")
 
 _local = threading.local()
 
@@ -42,6 +54,25 @@ def _busy() -> Iterator[None]:
         yield
     finally:
         _local.busy = False
+
+
+def in_boundary() -> bool:
+    """True when the current thread is inside a recorded boundary's body."""
+    return getattr(_local, "depth", 0) > 0
+
+
+@contextmanager
+def boundary() -> Iterator[None]:
+    """Mark a block as the body of a recorded boundary.
+
+    Everything recorded inside is suppressed, because on replay this body does
+    not run.
+    """
+    _local.depth = getattr(_local, "depth", 0) + 1
+    try:
+        yield
+    finally:
+        _local.depth -= 1
 
 
 @dataclass
@@ -99,12 +130,18 @@ class Recorder:
         blobs: BlobStore,
         redactor: Redactor,
         *,
-        record_stdlib_ambient: bool = False,
+        record_library_ambient: bool = False,
+        enrich: Optional[Callable[[Event], Optional[Dict[str, Any]]]] = None,
     ) -> None:
         self.writer = writer
         self.blobs = blobs
         self.redactor = redactor
-        self.record_stdlib_ambient = record_stdlib_ambient
+        self.record_library_ambient = record_library_ambient
+        #: Optional pure function that recognises an event and adds fields to
+        #: it -- see :mod:`reeltime.core.decoders`. Never allowed to fail a
+        #: recording.
+        self.enrich = enrich
+        self._enrich_failed = False
         self.stats = RunStats()
         self.t0 = _originals.perf_counter()
         self.enabled = True
@@ -118,14 +155,47 @@ class Recorder:
     def elapsed(self) -> float:
         return _originals.perf_counter() - self.t0
 
-    def _prepare(self, payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _normalize(self, payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """JSON-safe and scrubbed, but not yet externalised.
+
+        Enrichment runs between this and the blob store so a decoder reads the
+        actual response body rather than a ``blob:`` reference.
+        """
         if payload is None:
             return None
         jsonable = to_jsonable(payload)
         if not isinstance(jsonable, dict):  # pragma: no cover - defensive
             jsonable = {"value": jsonable}
-        scrubbed = self.redactor.scrub(jsonable)
-        return self.blobs.externalize(scrubbed)
+        return self.redactor.scrub(jsonable)
+
+    def _apply_enrichment(self, event: Event) -> None:
+        """Let a decoder add fields to the event. Never fails the recording."""
+        if self.enrich is None:
+            return
+        try:
+            extra = self.enrich(event)
+        except Exception:
+            if not self._enrich_failed:
+                self._enrich_failed = True
+                logger.debug(
+                    "a decoder raised on event %d; events are being written "
+                    "unenriched", event.i, exc_info=True,
+                )
+            return
+        if not extra:
+            return
+        kind = extra.get("kind")
+        if isinstance(kind, str):
+            event.kind = kind
+        for field in ("req", "res", "meta"):
+            addition = extra.get(field)
+            if not isinstance(addition, dict) or not addition:
+                continue
+            current = getattr(event, field)
+            if current is None:
+                setattr(event, field, dict(addition))
+            else:
+                current.update(addition)
 
     # -- recording -------------------------------------------------------
 
@@ -145,17 +215,24 @@ class Recorder:
         """Write one event. Returns None when the event was skipped.
 
         ``ambient`` marks the implicitly-patched sources (rand/time/uuid). Those
-        are dropped when they originate inside the standard library, because a
-        replayed ``asyncio`` event loop reading its own clock is neither
-        matchable nor useful -- see :attr:`record_stdlib_ambient`.
+        are dropped unless they originate in the user's own code: ``asyncio``
+        reads ``time.monotonic()`` every loop iteration, ``logging`` timestamps
+        every record, and httpx reads ``perf_counter()`` twice per request.
+        None of that is the agent's nondeterminism, recording it would bury the
+        trace, and the same filter applies on replay -- so those reads simply
+        stay live in both directions, which is consistent and matchable. See
+        :attr:`record_library_ambient`.
+
+        Returns None when a boundary body is already being recorded above this
+        call; see the module docstring.
         """
-        if not self.enabled or is_busy():
+        if not self.enabled or is_busy() or in_boundary():
             return None
 
         with _busy():
             when = self.elapsed if t_rel is None else t_rel
             where = callsite.caller(2) if site is None else site
-            if ambient and where.is_stdlib and not self.record_stdlib_ambient:
+            if ambient and where.is_library and not self.record_library_ambient:
                 return None
 
             index = next(self._counter)
@@ -167,10 +244,13 @@ class Recorder:
                 span=spans.current() if span is None else span,
                 t_rel=round(when, 6),
                 dur_ms=round(dur_ms, 3),
-                req=self._prepare(req) or {},
-                res=self._prepare(res),
+                req=self._normalize(req) or {},
+                res=self._normalize(res),
                 meta=dict(meta or {}),
             )
+            self._apply_enrichment(event)
+            event.req = self.blobs.externalize(event.req) or {}
+            event.res = self.blobs.externalize(event.res)
             self.stats.add(event)
             self.writer.write_event(event)
             return event
@@ -198,39 +278,56 @@ class Recorder:
         if not self.enabled or is_busy():
             yield box
             return
+        # A boundary inside another boundary is not its own event: the outer
+        # one already stands for this crossing, and on replay this body will
+        # not run at all.
+        nested = in_boundary()
         site = callsite.caller(3)
         started = _originals.perf_counter()
         t_rel = started - self.t0
         error: Optional[BaseException] = None
         try:
-            yield box
+            with boundary():
+                yield box
         except BaseException as exc:  # noqa: BLE001 - recorded, then re-raised
             error = exc
             raise
         finally:
-            info = dict(meta or {})
-            info.update(box.meta)
-            if error is not None:
-                info["error"] = {
-                    "type": type(error).__name__,
-                    "message": str(error)[:500],
-                }
-            self.record(
-                kind,
-                req,
-                box.res,
-                meta=info,
-                site=site,
-                span=span,
-                t_rel=t_rel,
-                dur_ms=(_originals.perf_counter() - started) * 1000.0,
-            )
+            if not nested:
+                info = dict(meta or {})
+                info.update(box.meta)
+                if error is not None:
+                    info["error"] = {
+                        "type": type(error).__name__,
+                        "message": str(error)[:500],
+                    }
+                self.record(
+                    kind,
+                    req,
+                    box.res,
+                    meta=info,
+                    site=site,
+                    span=span,
+                    t_rel=t_rel,
+                    dur_ms=(_originals.perf_counter() - started) * 1000.0,
+                )
 
     # -- teardown --------------------------------------------------------
 
-    def close(self, exit_code: Optional[int] = None) -> Dict[str, Any]:
-        """Write the footer and close the file. Returns the footer."""
+    def close(
+        self,
+        exit_code: Optional[int] = None,
+        *,
+        intercepted: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        """Write the footer and close the file. Returns the footer.
+
+        ``intercepted`` lists the HTTP backends that were actually patched. It
+        answers "why was my call not recorded?" without a second run.
+        """
         footer: Dict[str, Any] = self.stats.to_dict()
+        if intercepted is not None:
+            footer["intercepted"] = list(intercepted)
         footer["dur_s"] = round(self.elapsed, 3)
         footer["exit"] = exit_code
         redacted = self.redactor.hits

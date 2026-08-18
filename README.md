@@ -4,9 +4,9 @@
 nondeterminism during a run, then replay the run exactly — offline, instantly,
 for free.
 
-> **Status: milestone 1 of 10.** The recording core is built: trace format,
-> blob store, recorder, and ambient patching. Replay (`tape replay`) is
-> milestone 3; the `tape` CLI arrives in milestone 2. See
+> **Status: milestone 2 of 10.** Recording works end to end — HTTP (streaming
+> included), local tools, and ambient nondeterminism — with `tape run`,
+> `tape ls`, and `tape show`. Replay (`tape replay`) is milestone 3. See
 > [Roadmap](#roadmap). Not on PyPI yet.
 
 ---
@@ -46,24 +46,47 @@ pip install -e ".[dev]"
 
 ## Quickstart
 
+Record a script you have not modified at all:
+
+```bash
+$ tape run python agent.py
+✓ recorded 47 events → .tape/runs/01M09GEPFGRH2RQ8KG1BKWDAPE.jsonl  (43.2s, $0.31)
+
+$ tape ls
+RUN             WHEN               EVENTS      DUR     COST  COMMAND
+01M09GEPFGRH2R  2026-08-17 23:00       47    43.2s    $0.31  agent.py
+
+$ tape show 01M09G
+   0  tool       2ms  agent.py:31    read_file({"path": "notes.md"}) → "remember…"
+   1  llm      842ms  agent.py:88    gpt-4o-mini 1204→18 I'll delete b.txt
+   2  http      31ms  tools.py:12    GET https://api.weather.com/v1 → 200
+
+$ tape show 01M09G 1        # the whole event, blobs resolved
+```
+
+`tape run` needs no import in your code: it injects a `sitecustomize` on
+`PYTHONPATH` so reeltime installs at interpreter startup, before your agent
+imports anything.
+
+To scope recording yourself instead:
+
 ```python
-import random, uuid, datetime
+import random, uuid
 import reeltime as tape
+
+@tape.tool                                 # local tools become boundaries
+def read_file(path: str) -> str:
+    return open(path).read()
 
 with tape.session() as run:
     seed = random.random()                 # recorded
     request_id = uuid.uuid4()              # recorded
-    started = datetime.datetime.now()      # recorded
 
     with tape.span("plan"):                # groups the events below
-        tape.record_event(
-            "tool",
-            {"name": "read_file", "args": {"path": "notes.md"}},
-            {"value": "…file contents…"},
-        )
+        notes = read_file("notes.md")      # recorded
+        client.chat.completions.create(…)  # recorded, with tokens and cost
 
 print(run.summary.line())
-# recorded 4 events → .tape/runs/01M09J…jsonl  (0.0s, $0.00)
 ```
 
 The trace lands in `.tape/runs/<run_id>.jsonl`, one JSON object per line:
@@ -84,17 +107,41 @@ process did not exit cleanly.
 
 | Boundary | How | Milestone |
 |---|---|---|
+| any `httpx` / `httpx2` / `requests` call | transport shim | **M2 ✅** |
+| streaming responses, chunk by chunk | transport shim | **M2 ✅** |
+| model, tokens, and cost on LLM calls | provider decoders | **M2 ✅** |
+| `@tape.tool` / `wrap` / `wrap_all` | decorator | **M2 ✅** |
 | `random.*`, `numpy.random.*` | module-level patch | **M1 ✅** |
 | `uuid.uuid1/uuid4` | module-level patch | **M1 ✅** |
 | `time.time/monotonic/perf_counter` (+ `_ns`) | module-level patch | **M1 ✅** |
-| `datetime.now/utcnow/today` | subclass swap | **M1 ✅** |
 | anything you pass to `record_event()` | explicit | **M1 ✅** |
-| OpenAI / Anthropic / any `httpx` call | transport shim | M2 |
-| `@tape.tool` local functions | decorator | M2 |
-| streaming responses, chunk by chunk | transport shim | M2 |
+| `datetime.now/utcnow/today` | subclass swap | **opt-in** — see below |
 | MCP `tools/list` and `tools/call` | client wrapper | M5.5 |
 
 ## Design notes
+
+**Interception is at the transport, not the SDK.** The shim patches
+`Client._transport_for_url` on `httpx` *and* `httpx2` — as of 2026 the OpenAI
+SDK has moved to httpx2 while the Anthropic SDK is still on httpx — plus
+`requests.adapters.HTTPAdapter.send`. Supporting that split cost one argument,
+because both keep the same transport extension point. An SDK-layer interceptor
+would have needed rewriting for the migration. Nothing in the recording path
+knows a provider exists.
+
+**Model, tokens, and cost come from a decoder, not an interceptor.** A decoder
+is a pure function over an already-recorded event: no network, no filesystem,
+no import of the provider's SDK. If none matches, the event stays a plain
+`http` event with null tokens — an unrecognised provider is not an error. A
+decoder that raises is caught and the event is written unenriched; a recording
+never fails because of one. Adding a provider is one module in
+[`core/decoders/`](src/reeltime/core/decoders/) and one row in
+[`pricing.py`](src/reeltime/core/decoders/pricing.py).
+
+**The outermost boundary is the one recorded.** An HTTP call inside a
+`@tape.tool` body does not produce a second event, and neither do random draws
+or clock reads made there. That is not an optimisation: on replay the tool's
+result is served from the tape and its body never runs, so anything recorded
+inside it could never be matched.
 
 **Redaction is mandatory, not optional.** Traces are meant to be pasted into
 GitHub issues, so every event is scrubbed before it reaches disk —
@@ -109,11 +156,13 @@ configuration-shaped variables, never the whole environment.
 greppable in a terminal, and since agents resend the same growing message array
 every turn, deduplication shrinks a real run dramatically.
 
-**Standard-library clock reads are ignored by default.** `asyncio` reads
-`time.monotonic()` on every loop iteration and `logging` timestamps every
-record; recording those would bury the trace and hand a replayed clock to the
-event loop's own timeouts. Only reads originating in your code (and in your
-libraries) are recorded. Set `record_stdlib_ambient=True` to see them.
+**Only your own code's clock reads are recorded.** `asyncio` reads
+`time.monotonic()` every loop iteration, `logging` timestamps every record, and
+`httpx` reads `perf_counter()` twice per request. Recording those would bury the
+trace and hand a replayed clock to the event loop's own timeouts. The same
+filter applies on replay, so those reads stay live in both directions — which is
+consistent, and never a spurious miss. Set `record_library_ambient=True` to see
+them.
 
 **Spans, not global order.** Concurrent agents interleave, and wall-clock order
 across tasks is not reproducible. Every event carries a span path from a
@@ -134,8 +183,10 @@ Explicit arguments beat environment variables, which beat the nearest
 tape.install(
     tape_dir=".tape",              # or $TAPE_DIR
     blob_threshold=8192,           # or $REELTIME_BLOB_THRESHOLD
-    patch=("random", "uuid", "time", "datetime", "numpy"),
-    record_stdlib_ambient=False,
+    patch=("random", "uuid", "time", "numpy"),   # add "datetime" to opt in
+    http=True,                     # or $REELTIME_HTTP
+    decode=True,                   # provider decoders; $REELTIME_DECODE
+    record_library_ambient=False,
     redact=[r"ACME-[A-Z0-9]{24}"],
 )
 ```
@@ -151,9 +202,19 @@ Being precise about the boundary is the point.
 - **External state mutation.** If the agent deletes a file, replay does not
   undo it. Replay reproduces the *decisions*, not the world. Run replays in a
   scratch directory or a container.
+- **`datetime.now()`, unless you opt in.** `datetime` is a C type, so the only
+  way to see `now()` is to swap the module attribute for a subclass — and
+  pydantic v2 dispatches on type *identity*, so doing that makes the **real**
+  datetime class unrecognisable to it and breaks any library that imported it
+  first. The Anthropic SDK stops working entirely. Enable with
+  `patch=("random", "uuid", "time", "datetime")` if your stack is not pydantic
+  v2; `time.time()` is patched either way and covers most clock reads.
 - **`random.Random()` instances and `SystemRandom`.** Only the module-level
   `random.*` functions are patched. An explicitly constructed generator is an
   object you can seed yourself.
+- **Streamed `requests` responses.** Reading one to record it would consume the
+  caller's stream, so the event is marked `stream_not_captured` rather than
+  recording a body nobody saw. Streamed *httpx* responses are captured in full.
 - **`numpy.random.default_rng()` generators.** Same reasoning; only the legacy
   global functions are patched, and only if numpy was imported before
   `install()`.
@@ -171,8 +232,8 @@ Being precise about the boundary is the point.
 | M | Scope | Status |
 |---|---|---|
 | 1 | Trace format, blob store, recorder, ambient patches | ✅ |
-| 2 | httpx shim, provider decoders, `@tape.tool`, streaming capture, `tape run/ls/show` | next |
-| 3 | Player, three-tier matcher, `TapeMiss`, `tape replay`, streaming re-emission | |
+| 2 | httpx shim, provider decoders, `@tape.tool`, streaming capture, `tape run/ls/show` | ✅ |
+| 3 | Player, three-tier matcher, `TapeMiss`, `tape replay`, streaming re-emission | next |
 | 4 | `--context` inspection, `tape reindex`, README, PyPI publish | |
 | 5 | `tape fork` with patch grammar | |
 | 5.5 | MCP adapter | |

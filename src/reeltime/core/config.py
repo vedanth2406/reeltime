@@ -30,7 +30,9 @@ _KNOWN_KEYS = {
     "tape_dir",
     "blob_threshold",
     "patch",
-    "record_stdlib_ambient",
+    "record_library_ambient",
+    "http",
+    "decode",
     "redact",
     "env_capture",
     "collect_git",
@@ -61,8 +63,13 @@ class Config:
     blob_threshold: int = DEFAULT_THRESHOLD
     #: Which ambient groups to patch: random, uuid, time, datetime, numpy.
     patch: Tuple[str, ...] = GROUPS
-    #: Record ambient reads made by the standard library itself. Noisy.
-    record_stdlib_ambient: bool = False
+    #: Record ambient reads made by the stdlib and installed packages too,
+    #: not just by the user's own code. Very noisy; mostly a debugging aid.
+    record_library_ambient: bool = False
+    #: Intercept HTTP via the httpx transport shim and the requests fallback.
+    http: bool = True
+    #: Run the provider decoders to add model, tokens, and cost to LLM events.
+    decode: bool = True
     #: Extra redaction regexes, on top of the built-in key formats.
     redact: Tuple[str, ...] = ()
     env_capture: Tuple[str, ...] = DEFAULT_ENV_CAPTURE
@@ -87,7 +94,9 @@ class Config:
             tape_dir=tape_dir,
             blob_threshold=int(values.get("blob_threshold", DEFAULT_THRESHOLD)),
             patch=_as_tuple(values.get("patch", GROUPS)),
-            record_stdlib_ambient=_as_bool(values.get("record_stdlib_ambient", False)),
+            record_library_ambient=_as_bool(values.get("record_library_ambient", False)),
+            http=_as_bool(values.get("http", True)),
+            decode=_as_bool(values.get("decode", True)),
             redact=_as_tuple(values.get("redact", ())),
             env_capture=_as_tuple(values.get("env_capture", DEFAULT_ENV_CAPTURE)),
             collect_git=_as_bool(values.get("collect_git", True)),
@@ -111,7 +120,9 @@ def _from_env() -> Dict[str, Any]:
     mapping = {
         "REELTIME_BLOB_THRESHOLD": "blob_threshold",
         "REELTIME_PATCH": "patch",
-        "REELTIME_STDLIB_AMBIENT": "record_stdlib_ambient",
+        "REELTIME_STDLIB_AMBIENT": "record_library_ambient",
+        "REELTIME_HTTP": "http",
+        "REELTIME_DECODE": "decode",
         "REELTIME_REDACT": "redact",
         "REELTIME_COLLECT_GIT": "collect_git",
     }

@@ -56,7 +56,9 @@ DEFAULT_PATTERNS: Sequence[Tuple[str, str]] = (
     ),
 )
 
-#: Substrings that make an environment-variable *name* secret-shaped.
+#: Substrings that make an environment *variable* name secret-shaped. Broad on
+#: purpose: an env var called TOKEN is a credential essentially always, and the
+#: cost of dropping a harmless one from the header snapshot is nil.
 SECRET_NAME_HINTS = (
     "KEY",
     "SECRET",
@@ -71,11 +73,68 @@ SECRET_NAME_HINTS = (
     "COOKIE",
 )
 
+#: Words that make a *payload field* name a credential on their own.
+SECRET_FIELD_WORDS = frozenset(
+    {
+        "secret",
+        "password",
+        "passwd",
+        "passphrase",
+        "credential",
+        "credentials",
+        "apikey",
+        "privatekey",
+        "accesskey",
+        "secretkey",
+    }
+)
+
+#: Word pairs that make a payload field name a credential together.
+SECRET_FIELD_PAIRS = frozenset(
+    {
+        ("api", "key"),
+        ("access", "key"),
+        ("secret", "key"),
+        ("private", "key"),
+        ("client", "secret"),
+        ("auth", "token"),
+        ("access", "token"),
+        ("refresh", "token"),
+        ("id", "token"),
+        ("session", "token"),
+        ("bearer", "token"),
+    }
+)
+
+_WORD_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
+
 
 def looks_secret(name: str) -> bool:
-    """True if an identifier's *name* alone marks it as a secret."""
+    """True if an environment variable's *name* alone marks it as a secret."""
     upper = name.upper()
     return any(hint in upper for hint in SECRET_NAME_HINTS)
+
+
+def looks_secret_field(name: str) -> bool:
+    """True if a payload field's *name* alone marks it as a credential.
+
+    Deliberately stricter than :func:`looks_secret`. Payload fields are tool
+    arguments and request bodies, where ``key``, ``token``, and ``auth`` are
+    ordinary words -- ``sort(key=...)``, ``max_tokens``, ``auth_mode``.
+    Redacting those would quietly destroy the data the trace exists to show,
+    so a bare ambiguous word is not enough: it has to be qualified
+    (``api_key``, ``apiKey``, ``client_secret``) or unambiguous on its own
+    (``password``). Key-shaped *values* are still caught by the regex set
+    wherever they appear, so nothing is riding on this alone.
+    """
+    words = [w.lower() for w in _WORD_SPLIT.split(name) if w]
+    if not words:
+        return False
+    if any(word in SECRET_FIELD_WORDS for word in words):
+        return True
+    if "".join(words) in SECRET_FIELD_WORDS:
+        return True
+    return any(pair in SECRET_FIELD_PAIRS for pair in zip(words, words[1:]))
 
 
 class Redactor:
@@ -135,7 +194,7 @@ class Redactor:
             out: Dict[str, Any] = {}
             for key, item in value.items():
                 name = str(key)
-                if looks_secret(name) and isinstance(item, str) and item:
+                if looks_secret_field(name) and isinstance(item, str) and item:
                     self._count("named")
                     out[name] = "<redacted:named>"
                 else:
@@ -144,6 +203,26 @@ class Redactor:
         if isinstance(value, (list, tuple)):
             return [self.scrub(item) for item in value]
         return value
+
+    def scrub_header_pairs(self, pairs: Sequence[Tuple[str, str]]) -> List[List[str]]:
+        """Scrub headers recorded as ordered pairs.
+
+        HTTP headers repeat (``set-cookie``) and their order is part of the
+        message, so they are recorded as pairs rather than a mapping. That also
+        means the generic value scan is not enough on its own: it would only
+        catch a *key-shaped* credential, leaving an opaque session token or a
+        basic-auth blob sitting in the trace. Sensitive headers are dropped by
+        name here, wholesale, before anything else looks at them.
+        """
+        out: List[List[str]] = []
+        for key, value in pairs:
+            name = str(key)
+            if name.lower() in SENSITIVE_HEADERS:
+                self._count("header")
+                out.append([name, REDACTED_HEADER])
+            else:
+                out.append([name, self.scrub_text(str(value))])
+        return out
 
     def scrub_headers(self, headers: Mapping[str, Any]) -> Dict[str, str]:
         """Drop sensitive headers outright; scrub the values of the rest."""
