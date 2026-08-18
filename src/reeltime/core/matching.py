@@ -57,9 +57,25 @@ MAX_TIER = {STRICT: 1, DEFAULT: 2, LOOSE: 3}
 #: miss its own recording.
 EQUIVALENT_KINDS = {"llm": "http"}
 
+#: What ``--only <kind>`` expands to, which is *not* the same question.
+#: Folding exists so unlike events can be aligned; filtering exists so a user
+#: can ask for one thing and get it. Asking for ``http`` still includes ``llm``,
+#: because an llm event is an http event wearing a label -- but asking for
+#: ``llm`` used to be folded to ``http`` and hand back every plain HTTP call in
+#: the run, which is the opposite of what a narrowing flag is for.
+FILTER_ALIASES = {"http": ("http", "llm")}
+
 
 def kind_key(kind: str) -> str:
     return EQUIVALENT_KINDS.get(kind, kind)
+
+
+def filter_kinds(only: Sequence[str]) -> set:
+    """The literal event kinds ``--only`` should select."""
+    wanted = set()
+    for kind in only:
+        wanted.update(FILTER_ALIASES.get(kind, (kind,)))
+    return wanted
 
 
 #: Per kind, the request fields that identify the call. Deliberately narrow:

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import context as context_mod
 from .fmt import usd
-from .matching import kind_key
+from .matching import filter_kinds, kind_key
 from .trace import Event, Trace
 
 SAME = "same"
@@ -211,8 +211,8 @@ def diff(a: Trace, b: Trace, only: Optional[Sequence[str]] = None) -> TraceDiff:
 def _filter(events: Sequence[Event], only: Optional[Sequence[str]]) -> List[Event]:
     if not only:
         return list(events)
-    wanted = {kind_key(k) for k in only}
-    return [e for e in events if kind_key(e.kind) in wanted]
+    wanted = filter_kinds(only)
+    return [e for e in events if e.kind in wanted]
 
 
 # -- describing one paired step ------------------------------------------

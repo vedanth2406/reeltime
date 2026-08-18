@@ -251,6 +251,38 @@ def test_only_narrows_the_comparison_to_one_kind():
     assert llm_only.steps[0].event.kind == "llm"
 
 
+def http(index, site="agent.py:5", url="https://example.com/health"):
+    return Event(
+        i=index, kind="http", site=site, qual="agent.py::check",
+        req={"method": "GET", "url": url, "headers": []},
+        res={"status": 200, "headers": []},
+    )
+
+
+def test_only_llm_does_not_hand_back_every_plain_http_call():
+    """`--only` narrows. It used to fold llm to http and widen instead."""
+    events = [http(0), llm(1, [{"role": "user", "content": "hi"}]), http(2, site="a.py:9")]
+    a = trace(events)
+    b = trace(events, run_id="01B")
+
+    result = tracediff.diff(a, b, only=["llm"])
+    assert [step.event.kind for step in result.steps] == ["llm"]
+
+
+def test_only_http_still_includes_llm_events():
+    """An llm event *is* an http event a decoder put a label on."""
+    events = [http(0), llm(1, [{"role": "user", "content": "hi"}])]
+    result = tracediff.diff(trace(events), trace(events, run_id="01B"), only=["http"])
+    assert [step.event.kind for step in result.steps] == ["http", "llm"]
+
+
+def test_only_is_still_repeatable():
+    events = [http(0), llm(1, [{"role": "user", "content": "hi"}]), tool(2, "read")]
+    result = tracediff.diff(trace(events), trace(events, run_id="01B"),
+                            only=["llm", "tool"])
+    assert [step.event.kind for step in result.steps] == ["llm", "tool"]
+
+
 def test_totals_come_from_the_footers():
     a = trace([tool(0, "read")], cost=0.31, tokens=(14203, 0))
     b = trace([tool(0, "read")], run_id="01B", cost=0.44, tokens=(19881, 0))
