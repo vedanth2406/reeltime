@@ -91,7 +91,8 @@ process did not exit cleanly.
 | anything you pass to `record_event()` | explicit | **M1 ✅** |
 | OpenAI / Anthropic / any `httpx` call | transport shim | M2 |
 | `@tape.tool` local functions | decorator | M2 |
-| MCP `tools/list` and `tools/call` | client wrapper | M9 |
+| streaming responses, chunk by chunk | transport shim | M2 |
+| MCP `tools/list` and `tools/call` | client wrapper | M5.5 |
 
 ## Design notes
 
@@ -170,15 +171,20 @@ Being precise about the boundary is the point.
 | M | Scope | Status |
 |---|---|---|
 | 1 | Trace format, blob store, recorder, ambient patches | ✅ |
-| 2 | httpx shim, redaction, `@tape.tool`, `tape run/ls/show` | next |
-| 3 | Player, three-tier matcher, `TapeMiss`, `tape replay` | |
-| 4 | `--context` inspection, README, PyPI publish | |
+| 2 | httpx shim, provider decoders, `@tape.tool`, streaming capture, `tape run/ls/show` | next |
+| 3 | Player, three-tier matcher, `TapeMiss`, `tape replay`, streaming re-emission | |
+| 4 | `--context` inspection, `tape reindex`, README, PyPI publish | |
 | 5 | `tape fork` with patch grammar | |
-| 6 | Alignment-based `tape diff` | |
+| 5.5 | MCP adapter | |
+| 6 | `tape diff`, divergence-point reporting | |
 | 7 | `tape doctor` | |
-| 8 | Web UI | |
-| 9 | MCP + LangChain adapters, streaming replay | |
-| 10 | Overhead benchmarks, docs, examples | |
+| 8 | LangChain callback adapter | |
+| 9 | Overhead benchmarks, docs, examples | v1.0 |
+| 10 | Web UI | |
+
+Resequenced after a teardown of the nearest competitor — see
+[COMPETITIVE.md](COMPETITIVE.md). Streaming moved forward into M2/M3, MCP to
+M5.5, and the web UI to last.
 
 ## Development
 
@@ -189,10 +195,20 @@ pytest --cov --cov-report=term-missing     # core/ targets 85%+
 python examples/m1_ambient.py
 ```
 
+## Prior art
+
+`agenttape` on PyPI does deterministic record/replay of LLM and tool calls into
+YAML cassettes, with a pytest plugin, an alignment-based diff, and an HTML
+viewer. It is a *test fixture* library — it discards the recording when the run
+raises, fails when a prompt changes by one character, and freezes the clock and
+RNG rather than recording them. Those are the right calls for a fixture and the
+wrong ones for a debugger. [COMPETITIVE.md](COMPETITIVE.md) is the full
+teardown, including what it does better than us.
+
 ## Name
 
-`tapedeck` and `agenttape` were both taken on PyPI (the latter by a similar
-project), so the package is `reeltime`. The CLI stays `tape`.
+`tapedeck` and `agenttape` were both taken on PyPI, so the package is
+`reeltime`. The CLI stays `tape`.
 
 ## License
 

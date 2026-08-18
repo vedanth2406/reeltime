@@ -26,7 +26,9 @@ $ tape diff 01J9X2K 01J9X3P
 
 **The core insight:** an agent is deterministic *except* at four boundaries — LLM calls, tool/network results, randomness, and clock reads. Record what crosses those boundaries and you can replay everything between them exactly.
 
-**Name check:** verify `tapedeck` is available on PyPI before committing. Fallbacks: `agenttape`, `reeltime`, `rewindctl`. CLI stays `tape` either way.
+**Name check:** verify `tapedeck` is available on PyPI before committing. Fallbacks: `agenttape`, `reeltime`, `rewindctl`. CLI stays `tape` either way. *(Resolved 2026-08-17: `tapedeck` and `agenttape` are both taken. The package is `reeltime`; the CLI is `tape`.)*
+
+**Prior art exists, and pretending otherwise is a liability.** `agenttape` on PyPI does deterministic record/replay of LLM and tool calls into YAML cassettes, with a pytest plugin, an alignment-based diff, and a static HTML viewer. It is a *test fixture* library: it discards the recording when the run raises, fails hard when a prompt changes by one character, and freezes the clock and RNG instead of recording them. Those are the right calls for a fixture and the wrong ones for a debugger, which is the gap this tool is built for — but every claim in this spec should be written as if someone who has used AgentTape is reading it. See `COMPETITIVE.md` for the full teardown.
 
 ---
 
@@ -83,7 +85,11 @@ Install a custom `httpx.BaseTransport` / `AsyncBaseTransport` by patching `httpx
 
 Record: method, URL, headers (redacted), request body, status, response headers, response body, duration.
 
-**Streaming responses** need special handling — record the ordered chunk list, not just the assembled body. On replay, re-emit chunks. Default to instant emission; `--realtime` re-emits with recorded inter-chunk delays for reproducing timing-sensitive bugs (this matters for anything doing barge-in or early cancellation).
+**Streaming responses are a headline capability, not an edge case.** Most production agent code streams, and the closest competitor (AgentTape) refuses streaming outright — it warns and passes through live while recording, then raises on replay. Recording streams is therefore both the common case and the clearest thing we can do that nobody else can, so it ships in M2 with capture and M3 with replay, not late.
+
+Record the ordered chunk list, not just the assembled body — chunk boundaries must round-trip byte-for-byte. On replay, re-emit chunks. Default to instant emission; `--realtime` re-emits with recorded inter-chunk delays for reproducing timing-sensitive bugs (this matters for anything doing barge-in or early cancellation).
+
+Streaming also carries the token counts: providers send usage in a final chunk, so the provider decoders (§4.6) read the recorded chunk list rather than an assembled body.
 
 ### 4.2 Local tools
 
@@ -117,7 +123,7 @@ Patched at `tape.install()`:
 
 Wrap an MCP client session so `tools/list` and `tools/call` are recorded as first-class events with server identity, tool name, and arguments — not as opaque HTTP. Tool discovery results get recorded too, since a server exposing a different tool set is exactly the kind of thing that changes agent behavior between runs.
 
-This is a differentiator: no existing tool records MCP sessions, and MCP adoption is growing fast.
+This is the clearest piece of unclaimed ground, and it is on a clock. As of 2026-08-17 no record/replay tool records MCP sessions — but AgentTape publishes an `mcp>=1.9` optional dependency in its package metadata with no MCP code behind it, which reads as intent. **Resequenced from M9 to M5.5** for that reason: it is cheap once M2's interception exists, and being demonstrably first is worth more than the framework adapter it used to share a milestone with. See `COMPETITIVE.md`.
 
 ### 4.5 Redaction
 
@@ -128,6 +134,26 @@ Before writing any event:
 - User-extensible via `tape.redact(pattern)` and a `.tapeconfig` file
 
 Emit a warning listing what was redacted, so users know it happened.
+
+### 4.6 Provider decoders
+
+The §5 event schema wants `tokens` and `cost_usd` on every `llm` event, but principle 5 forbids intercepting at the SDK layer to get them. (AgentTape resolves this the other way, running an OpenAI SDK adapter alongside its HTTP interception — which is why it needs a new adapter per provider per major SDK version.)
+
+Split the two roles instead. **The transport stays provider-agnostic and records raw bytes. A decoder recognises the shape afterwards and enriches the event.** A decoder is a pure function over an already-recorded event — no I/O, no network, and no import of the provider's SDK:
+
+```python
+# core/decoders/openai.py
+def decode(event: Event) -> dict | None: ...
+```
+
+- **One module per provider** in `core/decoders/`, registered with a match predicate: URL host plus path shape, plus a key check against the response body. First match wins.
+- **No match returns `None`**, and the event keeps `tokens: null` and `cost_usd: null`. That is a valid, replayable event — an unrecognised provider is not an error, it is just an unenriched event.
+- **A decoder that raises must never fail the recording.** Catch it, log once at debug level, write the event unenriched. There is a test with a deliberately raising decoder.
+- **Decoding runs at write time** for convenience, but the function stays callable over an already-written trace so that a new decoder can enrich old runs. The programmatic path ships in M2; the `tape reindex <run>` CLI verb is **deferred to M4**, where the rest of the inspection surface gets built — there are no old traces worth reindexing before then.
+- **Pricing lives in a data file**, not in decoder logic, with a source URL and the date it was checked. Prices change. A model string that is not in the table leaves `cost_usd: null` rather than guessing.
+- **Streaming works the same way.** Providers put usage in a terminal chunk, so the decoder reads the recorded chunk list rather than an assembled body.
+
+Adding a provider is then a pure function and a pricing row, with no patching and nothing to break when the vendor ships a new SDK.
 
 ---
 
@@ -240,6 +266,8 @@ tokens A 14,203  B 19,881
 
 `--json` for machine output. `--only llm` / `--only tool` to filter.
 
+**Build the divergence point first.** Alignment plus field-level change reporting is table stakes — AgentTape already ships it (`difflib.SequenceMatcher` over per-step signatures, with field paths). What no one else attempts is naming the step where the two trajectories stop being the same run and summarising what each branch did afterwards: `step 15 ⋯ divergent from here (A: 6 more events, B: 9 more events)`. That line is the differentiator and the reason to run `tape diff` at all, so implement it before the per-field diff rather than as a footer.
+
 ---
 
 ## 9. `tape doctor`
@@ -266,6 +294,8 @@ This is a standalone reason to install the tool even for someone who never uses 
 
 ## 10. Web UI
 
+**Resequenced to last, after v1.0.** This is the most expensive milestone in the plan and, since AgentTape ships a static HTML viewer and an ASCII waterfall today, the least differentiating. A better UI does not win an argument that fork and drift-tolerant replay already win. Ship the ASCII timeline inside `tape show` first — a few percent of the effort for most of the value.
+
 `tape ui` serves a local viewer at `localhost:7654`. FastAPI + a single-page frontend. Keep it plain: this is a debugger, not a product.
 
 - **Timeline** — horizontal event track, colored by kind, width proportional to duration. Click to inspect. Keyboard `←`/`→` to scrub.
@@ -284,16 +314,19 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 
 | M | Scope | Deliverable |
 |---|---|---|
-| **1** | Trace format, blob store, `Recorder`, `tape.install()`, ambient patches (rand/time/uuid) | Traces get written |
-| **2** | httpx transport shim, redaction, `@tape.tool`, `tape run`, `tape ls`, `tape show` | Records real OpenAI/Anthropic agents |
-| **3** | `Player`, three-tier matcher, `TapeMiss` errors, `tape replay --to/--step` | **Replay works — this is the core** |
-| **4** | `--context` inspection, README, PyPI publish | v0.1.0 released |
+| **1** | Trace format, blob store, `Recorder`, `tape.install()`, ambient patches (rand/time/uuid) | Traces get written ✅ |
+| **2** | httpx transport shim (sync + async), `requests` fallback, provider decoders (§4.6), redaction on the HTTP path, `@tape.tool`, **streaming chunk capture**, `tape run`, `tape ls`, `tape show` | Records real OpenAI/Anthropic agents, streaming included |
+| **3** | `Player`, three-tier matcher, `TapeMiss` errors, `tape replay --to/--step`, streaming re-emission (`--realtime`) | **Replay works — this is the core** |
+| **4** | `--context` inspection, `tape reindex`, README, PyPI publish | v0.1.0 released |
 | **5** | Fork + patch grammar, lineage tracking | `tape fork` |
-| **6** | Alignment-based diff, `tape diff` | Trajectory comparison |
+| **5.5** | MCP adapter | Unclaimed ground — take it before someone else does |
+| **6** | Alignment-based diff, divergence-point reporting first | `tape diff` |
 | **7** | `tape doctor` | Nondeterminism detection |
-| **8** | Web UI | `tape ui` |
-| **9** | MCP adapter, LangChain callback adapter, streaming replay | Framework coverage |
-| **10** | Overhead benchmarks, docs site, examples dir | v1.0 |
+| **8** | LangChain callback adapter | Framework coverage |
+| **9** | Overhead benchmarks, docs site, examples dir | v1.0 |
+| **10** | Web UI | `tape ui` |
+
+**Resequenced 2026-08-17 after the AgentTape analysis** (`COMPETITIVE.md`). Streaming capture moved from M9 into M2 and streaming replay into M3, because the closest competitor cannot record streams at all and most production agents use them. MCP moved from M9 to M5.5, because AgentTape ships an `mcp` extra with no code behind it and that lead will not last. The web UI moved from M8 to last, because a viewer is the most expensive thing in the plan and the least differentiating now that a competitor ships one — v1.0 no longer waits on it.
 
 M1–M4 is the minimum viable tool and is achievable in about a week of focused work. Everything after is what makes it worth starring.
 
@@ -336,11 +369,15 @@ The README *is* the marketing. Structure it in this order:
 
 1. **A 20-second terminal GIF**: run → fail → `tape replay --to 14` → `tape show 14 --context` → the bug is visible. No narration needed.
 2. **The problem, in three sentences.** "Your agent failed at step 14. You re-ran it. Now it fails at step 11. This fixes that."
-3. **Install and 5-line quickstart.** `pip install tapedeck` then `tape run python agent.py`.
-4. **The four boundaries diagram** from §1 — it makes the whole approach click instantly.
-5. **Overhead numbers.** Record mode adds X ms/call and Y MB/1000 events. Replay is Zx faster than live and costs $0. Measure these honestly.
-6. **What this can't replay** (§13).
-7. **Comparison table** vs. VCR.py, LangSmith, and Braintrust — be fair: those are observability/eval platforms, this is a local deterministic debugger. Different jobs. Saying so accurately builds more trust than overclaiming.
+3. **The three things nothing else does**, as three bullets, above the fold:
+   - **Fork from step N.** Change one thing at step 13 and watch what happens at 14. The first 13 steps are free and identical.
+   - **Replay survives an edited prompt.** Change a character and replay still runs, reporting drift instead of failing. Content-hash tools cannot do this by construction.
+   - **Streaming is recorded chunk by chunk**, and replays with the boundaries intact. The nearest competitor refuses streaming outright.
+4. **Install and 5-line quickstart.** `pip install reeltime` then `tape run python agent.py`.
+5. **The four boundaries diagram** from §1 — it makes the whole approach click instantly.
+6. **Overhead numbers.** Record mode adds X ms/call and Y MB/1000 events. Replay is Zx faster than live and costs $0. Measure these honestly.
+7. **What this can't replay** (§13).
+8. **Comparison table** — VCR.py, LangSmith, Braintrust, **and `agenttape`**. The first three are observability/eval platforms doing a different job, and saying so accurately builds more trust than overclaiming. AgentTape is the one real head-to-head, so give it the most honest row on the page: name what it does better (pytest integration, hand-editable YAML cassettes, recorded exceptions that re-raise with the real class, a shipped CLI and viewer) before naming what it cannot do (fork, drift-tolerant replay, streaming, MCP, and keeping the trace when the run crashes). Anyone who has used it will check, and a table that reads as fair is worth more than one that reads as marketing.
 
 ---
 
