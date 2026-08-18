@@ -185,20 +185,9 @@ class Recorder:
                     "unenriched", event.i, exc_info=True,
                 )
             return
-        if not extra:
-            return
-        kind = extra.get("kind")
-        if isinstance(kind, str):
-            event.kind = kind
-        for field in ("req", "res", "meta"):
-            addition = extra.get(field)
-            if not isinstance(addition, dict) or not addition:
-                continue
-            current = getattr(event, field)
-            if current is None:
-                setattr(event, field, dict(addition))
-            else:
-                current.update(addition)
+        from .decoders import apply as apply_enrichment
+
+        apply_enrichment(event, extra)
 
     # -- recording -------------------------------------------------------
 

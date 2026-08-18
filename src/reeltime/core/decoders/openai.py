@@ -157,3 +157,44 @@ def decode(event: Event) -> Optional[Dict[str, Any]]:
         meta["cost_usd"] = cost
 
     return {"kind": "llm", "req": req, "res": res, "meta": meta}
+
+
+def context(event: Event) -> Optional[Dict[str, Any]]:
+    """The message array this call sent, normalised for display and diffing.
+
+    Returns the raw provider shapes; :mod:`reeltime.core.context` flattens
+    them. Kept next to the decoder because knowing where the messages live is
+    provider knowledge, and this is the module that owns it.
+    """
+    if not matches(event):
+        return None
+    request = common.request_json(event) or {}
+    messages = request.get("messages")
+    if not isinstance(messages, list):
+        # The Responses API calls it `input`, and accepts a bare string.
+        value = request.get("input")
+        if isinstance(value, str):
+            messages = [{"role": "user", "content": value}]
+        elif isinstance(value, list):
+            messages = value
+        else:
+            messages = []
+        instructions = request.get("instructions")
+        if isinstance(instructions, str):
+            messages = [{"role": "system", "content": instructions}] + list(messages)
+    return {
+        "provider": NAME,
+        "model": request.get("model"),
+        "messages": messages,
+        "tools": [
+            (tool.get("function") or tool).get("name")
+            for tool in request.get("tools") or []
+            if isinstance(tool, dict)
+        ],
+        "params": {
+            key: request[key]
+            for key in ("temperature", "top_p", "max_tokens", "seed",
+                        "response_format", "tool_choice")
+            if key in request
+        },
+    }
