@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-08-18
+
+### Fixed
+
+- **`tape diff --only <kind>` widened the comparison instead of narrowing it.**
+  Kinds are folded for *alignment* — `llm` is a label a decoder puts on an
+  `http` event, and folding is what lets a run recorded before that decoder
+  existed line up against one recorded after. Filtering was folding too, so
+  `--only llm` asked for LLM calls and got every plain HTTP request in the run
+  as well. Filtering is now literal, with one deliberate alias: `--only http`
+  still includes `llm`, because an llm event *is* an http event wearing a
+  label. Alignment is unchanged, so this affects nothing but which events
+  `--only` selects.
+
 ## [0.3.0] — 2026-08-18
 
 ### Added
