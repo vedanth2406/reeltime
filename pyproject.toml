@@ -4,19 +4,32 @@ build-backend = "hatchling.build"
 
 [project]
 name = "reeltime"
-version = "0.1.0.dev0"
-description = "Deterministic record/replay debugger for LLM agents"
+version = "0.1.0"
+description = "Deterministic record/replay debugger for LLM agents: replay a failed run offline, instantly, for free"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
-authors = [{ name = "Vedanth" }]
-keywords = ["llm", "agents", "debugging", "record", "replay", "determinism"]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Vedanth Dharnish" }]
+keywords = [
+  "llm", "agents", "debugging", "debugger", "record", "replay",
+  "determinism", "openai", "anthropic", "observability", "testing",
+]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
   "Topic :: Software Development :: Debuggers",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
 ]
 dependencies = []
 
@@ -35,8 +48,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vedanth/reeltime"
-Issues = "https://github.com/vedanth/reeltime/issues"
+Homepage = "https://github.com/vedanth2406/reeltime"
+Repository = "https://github.com/vedanth2406/reeltime"
+Issues = "https://github.com/vedanth2406/reeltime/issues"
+Changelog = "https://github.com/vedanth2406/reeltime/blob/main/CHANGELOG.md"
 
 [project.scripts]
 tape = "reeltime.cli:main"

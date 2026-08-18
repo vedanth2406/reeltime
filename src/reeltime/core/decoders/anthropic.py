@@ -143,3 +143,36 @@ def decode(event: Event) -> Optional[Dict[str, Any]]:
         meta["cost_usd"] = cost
 
     return {"kind": "llm", "req": req, "res": res, "meta": meta}
+
+
+def context(event: Event) -> Optional[Dict[str, Any]]:
+    """The message array this call sent, normalised for display and diffing.
+
+    The system prompt travels in its own top-level field rather than inside the
+    array, so it is hoisted to position 0 -- it is part of what the model read,
+    and leaving it out of the context view would hide the single field people
+    most often get wrong.
+    """
+    if not matches(event):
+        return None
+    request = common.request_json(event) or {}
+    messages = list(request.get("messages") or [])
+    system = request.get("system")
+    if system:
+        messages = [{"role": "system", "content": system, "_hoisted": True}] + messages
+    return {
+        "provider": NAME,
+        "model": request.get("model"),
+        "messages": messages,
+        "tools": [
+            tool.get("name")
+            for tool in request.get("tools") or []
+            if isinstance(tool, dict)
+        ],
+        "params": {
+            key: request[key]
+            for key in ("temperature", "top_p", "max_tokens", "stop_sequences",
+                        "tool_choice")
+            if key in request
+        },
+    }

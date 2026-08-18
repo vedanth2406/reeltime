@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import __version__
-from .core import fmt, ids, paths
+from .core import context, fmt, ids, paths
 from .core.blobs import BlobStore
+from .core.reindex import reindex
 from .core.trace import Event, Trace, read_trace
 from .errors import TapeError
 
@@ -226,11 +227,30 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
     original = (trace.footer or {}).get("dur_s")
     if original:
+        # Deliberately not a ratio: this number includes interpreter startup,
+        # so dividing by it would understate replay on a short run. The
+        # boundary-to-boundary speedup is on the line above, from the player.
         sys.stderr.write(
-            "  wall clock {:.2f}s vs {:.2f}s recorded ({:.0f}× faster, $0.00)\n".format(
-                elapsed, original, original / elapsed if elapsed else 0.0)
+            "  wall clock {:.2f}s including startup; the recorded run took "
+            "{:.2f}s\n".format(elapsed, original)
         )
     return completed.returncode
+
+
+# -- tape reindex --------------------------------------------------------
+
+
+def cmd_reindex(args: argparse.Namespace) -> int:
+    tape_dir = _tape_dir(args)
+    path = _resolve_run(tape_dir, args.run)
+    result = reindex(path, BlobStore(paths.blobs_dir(tape_dir)), dry_run=args.dry_run)
+
+    print("{}  {}".format(_short(result.run_id), result.line()))
+    for note in result.notes():
+        print("  {}".format(note))
+    if args.dry_run and result.enriched:
+        print("  (nothing written; drop --dry-run to apply)")
+    return 0
 
 
 # -- tape ls -------------------------------------------------------------
@@ -314,9 +334,45 @@ def _print_run(trace: Trace) -> None:
             (footer.get("tokens") or {}).get("out", 0)))
 
 
+def _event_at(trace: Trace, index: int) -> Event:
+    for event in trace.events:
+        if event.i == index:
+            return event
+    raise TapeError("run {} has no event {} (it has {})".format(
+        _short(trace.run_id), index, len(trace)))
+
+
+def _context_at(trace: Trace, index: int, blobs: BlobStore):
+    event = _event_at(trace, index)
+    assembled = context.from_event(event, blobs)
+    if assembled is None:
+        raise TapeError(
+            "event {} is a {} event, not a recognised LLM call, so it has no "
+            "message array to show. `tape show {} {}` prints it in full.".format(
+                index, event.kind, _short(trace.run_id), index)
+        )
+    return assembled
+
+
 def cmd_show(args: argparse.Namespace) -> int:
     tape_dir = _tape_dir(args)
     trace = read_trace(_resolve_run(tape_dir, args.run))
+
+    if args.context:
+        if args.index is None:
+            raise TapeError(
+                "--context needs an event: try `tape show {} <N> --context`, or "
+                "`tape show {}` to see which events are LLM calls".format(
+                    _short(trace.run_id), _short(trace.run_id))
+            )
+        blobs = BlobStore(paths.blobs_dir(tape_dir))
+        assembled = _context_at(trace, args.index, blobs)
+        if args.diff is None:
+            sys.stdout.write(context.render(assembled, collapse=not args.full))
+        else:
+            earlier = _context_at(trace, args.diff, blobs)
+            sys.stdout.write(context.render_diff(earlier, assembled))
+        return 0
 
     if args.index is None:
         if args.json:
@@ -328,13 +384,8 @@ def cmd_show(args: argparse.Namespace) -> int:
             _print_run(trace)
         return 0
 
-    matches = [e for e in trace.events if e.i == args.index]
-    if not matches:
-        raise TapeError("run {} has no event {} (it has {})".format(
-            _short(trace.run_id), args.index, len(trace)))
-
     blobs = BlobStore(paths.blobs_dir(tape_dir))
-    event = matches[0]
+    event = _event_at(trace, args.index)
     resolved = event.to_dict()
     if not args.raw:
         # Blob references are an encoding detail; showing an event means
@@ -379,6 +430,13 @@ def build_parser() -> argparse.ArgumentParser:
                             help="also match on content hash alone (tier 3)")
     replay.set_defaults(func=cmd_replay)
 
+    reindex_cmd = sub.add_parser(
+        "reindex", help="re-run the provider decoders over an existing run")
+    reindex_cmd.add_argument("run", help="run id, or any unambiguous prefix")
+    reindex_cmd.add_argument("--dry-run", action="store_true",
+                             help="report what would change without writing")
+    reindex_cmd.set_defaults(func=cmd_reindex)
+
     ls = sub.add_parser("ls", help="list recorded runs, newest first")
     ls.add_argument("-n", "--limit", type=int, default=20)
     ls.add_argument("--json", action="store_true")
@@ -390,6 +448,12 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--json", action="store_true")
     show.add_argument("--raw", action="store_true",
                       help="keep blob: references instead of resolving them")
+    show.add_argument("--context", action="store_true",
+                      help="print the full message array sent to the model")
+    show.add_argument("--diff", type=int, metavar="M",
+                      help="with --context: show what changed since event M")
+    show.add_argument("--full", action="store_true",
+                      help="with --context: do not collapse long messages")
     show.set_defaults(func=cmd_show)
 
     return parser

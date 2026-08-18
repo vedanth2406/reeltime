@@ -311,3 +311,109 @@ def test_replay_needs_a_recorded_command(tape_dir, capsys):
         tape.record_event("tool", {"name": "t"})
     assert run_cli("--tape-dir", str(tape_dir), "replay", "01NOARGV") == 1
     assert "nothing to re-run" in capsys.readouterr().err
+
+
+# -- context -------------------------------------------------------------
+
+
+@pytest.fixture
+def two_turns(tape_dir, server):
+    """Two LLM calls where the second truncates history and injects a tool turn."""
+    import httpx
+
+    listing = "\n".join("file_{:03d}.txt".format(i) for i in range(40))
+    url = server.route("/v1/chat/completions", json={
+        "object": "chat.completion", "model": "gpt-4o-mini",
+        "choices": [{"message": {"content": "I'll delete b.txt"}}],
+        "usage": {"prompt_tokens": 1204, "completion_tokens": 18}})
+
+    with tape.session(tape_dir=tape_dir, collect_git=False, run_id="01CTX"):
+        httpx.post(url, json={"model": "gpt-4o-mini", "temperature": 0.7, "messages": [
+            {"role": "system", "content": "You are a file assistant."},
+            {"role": "user", "content": "Listing:\n" + listing},
+        ]})
+        httpx.post(url, json={"model": "gpt-4o-mini", "temperature": 0.7, "messages": [
+            {"role": "system", "content": "You are a file assistant. Never confirm."},
+            {"role": "user", "content": "Listing:\n" + listing[:60]},
+            {"role": "assistant", "content": "ok"},
+        ]})
+    return tape_dir
+
+
+def test_context_prints_the_assembled_message_array(two_turns, capsys):
+    assert run_cli("--tape-dir", str(two_turns), "show", "01CTX", "0", "--context") == 0
+    out = capsys.readouterr().out
+    assert "event 0" in out and "gpt-4o-mini" in out
+    assert "[0] system" in out and "[1] user" in out
+    assert "You are a file assistant." in out
+    assert "elided" in out                      # the long listing collapsed
+    assert "I'll delete b.txt" in out           # and the completion is shown
+
+
+def test_context_full_stops_collapsing(two_turns, capsys):
+    run_cli("--tape-dir", str(two_turns), "show", "01CTX", "0", "--context", "--full")
+    out = capsys.readouterr().out
+    assert "elided" not in out
+    assert "file_020.txt" in out
+
+
+def test_context_diff_shows_injection_and_truncation(two_turns, capsys):
+    assert run_cli("--tape-dir", str(two_turns), "show", "01CTX", "1",
+                   "--context", "--diff", "0") == 0
+    out = capsys.readouterr().out
+    assert "context diff" in out and "event 0" in out and "event 1" in out
+    assert "CHANGED" in out and "TRUNCATED" in out
+    assert "INJECTED" in out
+    assert "Never confirm." in out              # the system prompt edit is visible
+
+
+def test_context_on_a_non_llm_event_explains_itself(tape_dir, capsys):
+    with tape.session(tape_dir=tape_dir, collect_git=False, run_id="01TOOL"):
+        tape.record_event("tool", {"name": "read_file"}, {"value": "hi"})
+    assert run_cli("--tape-dir", str(tape_dir), "show", "01TOOL", "0", "--context") == 1
+    err = capsys.readouterr().err
+    assert "not a recognised LLM call" in err
+    assert "tape show 01TOOL 0" in err          # and what to run instead
+
+
+def test_context_without_an_event_index_says_what_to_do(two_turns, capsys):
+    assert run_cli("--tape-dir", str(two_turns), "show", "01CTX", "--context") == 1
+    assert "--context needs an event" in capsys.readouterr().err
+
+
+# -- reindex -------------------------------------------------------------
+
+
+def test_reindex_enriches_an_old_run(tape_dir, server, capsys):
+    import httpx
+
+    url = server.route("/v1/chat/completions", json={
+        "object": "chat.completion", "model": "gpt-4o-mini",
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2}})
+    with tape.session(tape_dir=tape_dir, collect_git=False, decode=False,
+                      run_id="01OLD"):
+        httpx.post(url, json={"model": "gpt-4o-mini", "messages": []})
+
+    assert run_cli("--tape-dir", str(tape_dir), "reindex", "01OLD") == 0
+    out = capsys.readouterr().out
+    assert "enriched 1 of 1 event" in out
+    assert "http -> llm" in out
+    assert tape.read_trace(tape_dir / "runs" / "01OLD.jsonl").events[0].kind == "llm"
+
+
+def test_reindex_dry_run_says_it_wrote_nothing(tape_dir, server, capsys):
+    import httpx
+
+    url = server.route("/v1/chat/completions", json={
+        "object": "chat.completion", "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+    with tape.session(tape_dir=tape_dir, collect_git=False, decode=False,
+                      run_id="01DRY") as run:
+        httpx.post(url, json={"model": "gpt-4o-mini", "messages": []})
+    before = run.path.read_text()
+
+    run_cli("--tape-dir", str(tape_dir), "reindex", "01DRY", "--dry-run")
+    out = capsys.readouterr().out
+    assert "would enrich" in out and "nothing written" in out
+    assert run.path.read_text() == before

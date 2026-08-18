@@ -90,6 +90,14 @@ class _Handler(BaseHTTPRequestHandler):
             {"path": path, "headers": dict(self.headers), "body": body}
         )
         route = self.server.routes.get(path) or self.server.routes.get("*")
+        if route is not None and route.sse is not None and route.json is not None:
+            # A route can carry both shapes; pick the one the caller asked for,
+            # the way a real provider does.
+            wants_stream = b'"stream": true' in body or b'"stream":true' in body
+            route = Route(status=route.status, headers=route.headers,
+                          sse=route.sse if wants_stream else None,
+                          json=None if wants_stream else route.json,
+                          chunk_delay=route.chunk_delay)
         if route is None:
             self.send_response(404)
             self.send_header("content-length", "0")

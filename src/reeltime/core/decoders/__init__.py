@@ -32,16 +32,18 @@ from . import anthropic, openai
 
 
 class Decoder(NamedTuple):
-    """A provider recogniser. ``matches`` gates ``decode``; first match wins."""
+    """A provider recogniser. ``matches`` gates the rest; first match wins."""
 
     name: str
     matches: Callable[[Event], bool]
     decode: Callable[[Event], Optional[Dict[str, Any]]]
+    #: Optional: extract the message array for ``tape show --context``.
+    context: Optional[Callable[[Event], Optional[Dict[str, Any]]]] = None
 
 
 REGISTRY: List[Decoder] = [
-    Decoder(openai.NAME, openai.matches, openai.decode),
-    Decoder(anthropic.NAME, anthropic.matches, anthropic.decode),
+    Decoder(openai.NAME, openai.matches, openai.decode, openai.context),
+    Decoder(anthropic.NAME, anthropic.matches, anthropic.decode, anthropic.context),
 ]
 
 
@@ -60,6 +62,46 @@ def decode(event: Event) -> Optional[Dict[str, Any]]:
     for decoder in REGISTRY:
         if decoder.matches(event):
             return decoder.decode(event)
+    return None
+
+
+def apply(event: Event, extra: Optional[Dict[str, Any]]) -> bool:
+    """Merge a decoder's output onto an event. Returns True if anything changed.
+
+    Shared by the live recording path and by ``tape reindex`` so the two cannot
+    drift apart: an event enriched after the fact must come out identical to one
+    enriched as it was written.
+    """
+    if not extra:
+        return False
+    changed = False
+    kind = extra.get("kind")
+    if isinstance(kind, str) and kind != event.kind:
+        event.kind = kind
+        changed = True
+    for field in ("req", "res", "meta"):
+        addition = extra.get(field)
+        if not isinstance(addition, dict) or not addition:
+            continue
+        current = getattr(event, field)
+        if current is None:
+            setattr(event, field, dict(addition))
+            changed = True
+            continue
+        for key, value in addition.items():
+            if current.get(key) != value:
+                current[key] = value
+                changed = True
+    return changed
+
+
+def context_of(event: Event) -> Optional[Dict[str, Any]]:
+    """The raw message array for an LLM event, from whichever decoder claims it."""
+    if event.kind not in ("http", "llm"):
+        return None
+    for decoder in REGISTRY:
+        if decoder.context is not None and decoder.matches(event):
+            return decoder.context(event)
     return None
 
 
@@ -85,4 +127,5 @@ def decode_resolved(event: Event, blobs: Any) -> Optional[Dict[str, Any]]:
     return decode(resolved)
 
 
-__all__ = ["Decoder", "REGISTRY", "decode", "decode_resolved", "register"]
+__all__ = ["Decoder", "REGISTRY", "apply", "context_of", "decode",
+           "decode_resolved", "register"]
