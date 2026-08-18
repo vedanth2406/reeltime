@@ -3,6 +3,30 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`tape diff <a> <b>`** — aligns two runs by event signature (kind, call
+  site, name) and reports what changed structurally, not as text. The headline
+  is the divergence point: the step where the two trajectories stop being the
+  same run, and how many events each went on to record alone. For LLM steps the
+  report reaches into the context, so a changed system prompt shows as the two
+  lines that changed. `--only <kind>` narrows the comparison; `--json` emits the
+  same structure as data.
+- **A wheel-install CI gate.** `pytest -m wheel` builds the wheel, installs it
+  into a virtualenv reached through a symlink, and asserts a three-event script
+  records three events. The unit suite runs from a checkout with no symlinks in
+  its path and is structurally blind to path-normalisation bugs — which is how
+  the 0.1.x defect below survived. Runs on Linux and macOS in CI.
+
+### Fixed
+
+- The `sitecustomize` shim filtered its own directory off `sys.path` with
+  `abspath`, which does not resolve symlinks. Had that filter ever missed, the
+  import underneath would have found the shim again and recursed at interpreter
+  startup. Now `realpath` on both sides, with a re-entry guard.
+
 ## [0.2.0] — 2026-08-18
 
 ### Added
