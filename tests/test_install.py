@@ -73,7 +73,12 @@ def test_session_closes_the_trace_even_when_the_block_raises(tape_dir):
 
 
 def test_unimplemented_modes_say_which_milestone(tape_dir):
-    with pytest.raises(TapeConfigError, match="milestone 3"):
+    with pytest.raises(TapeConfigError, match="milestone 5"):
+        tape.install("fork", tape_dir=tape_dir)
+
+
+def test_replay_needs_a_run_to_replay(tape_dir):
+    with pytest.raises(TapeConfigError, match="needs a run to replay"):
         tape.install("replay", tape_dir=tape_dir)
 
 

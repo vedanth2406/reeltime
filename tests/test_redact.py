@@ -135,3 +135,41 @@ def test_env_var_names_use_the_broader_rule():
 
     assert looks_secret("GITHUB_TOKEN") and not looks_secret_field("token")
     assert looks_secret("SESSION_KEY") and not looks_secret_field("key")
+
+
+def test_no_encoding_of_a_secret_reaches_disk(recording, server):
+    """Search the trace for the secret in every form it could be stored in.
+
+    A previous version stored a base64 copy of each JSON body next to the
+    scrubbed one, so the secret was on disk in full while a literal-string
+    search over the trace still came up clean. Redaction tests have to decode
+    what they search.
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    url = server.route("/v1/chat", json={"echo": "token " + FAKE_OPENAI})
+    # A spaced encoder, like most SDKs use -- the case that used to keep a raw copy.
+    httpx.post(url, content=_json.dumps({"prompt": "my key is " + FAKE_OPENAI}),
+               headers={"content-type": "application/json"})
+    tape.uninstall()
+
+    raw_text = recording.path.read_text()
+    assert FAKE_OPENAI not in raw_text
+
+    event = _json.loads(raw_text.splitlines()[1])
+    for side in ("req", "res"):
+        body = event[side]["body"]
+        assert "raw" not in body, "a JSON body must not keep an unscrubbable copy"
+        assert FAKE_OPENAI not in _json.dumps(body)
+
+    # And nothing anywhere in the file decodes back to it.
+    for token in raw_text.replace('"', " ").split():
+        if len(token) > 24:
+            try:
+                decoded = base64.b64decode(token + "===", validate=True).decode("utf-8", "ignore")
+            except Exception:
+                continue
+            assert FAKE_OPENAI not in decoded

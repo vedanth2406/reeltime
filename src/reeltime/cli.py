@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -22,7 +23,6 @@ from .core.trace import Event, Trace, read_trace
 from .errors import TapeError
 
 PLANNED = (
-    ("replay", "replay a run offline, for free", "M3"),
     ("fork", "replay to step N, then run live", "M5"),
     ("diff", "align and compare two runs", "M6"),
     ("doctor", "find a run's nondeterminism sources", "M7"),
@@ -173,6 +173,66 @@ def cmd_run(args: argparse.Namespace) -> int:
     return completed.returncode
 
 
+# -- tape replay ---------------------------------------------------------
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    tape_dir = _tape_dir(args)
+    trace_file = _resolve_run(tape_dir, args.run)
+    trace = read_trace(trace_file)
+
+    if not trace.header.argv:
+        raise TapeError(
+            "run {} did not record a command, so there is nothing to re-run".format(
+                _short(trace.run_id))
+        )
+
+    strictness = "strict" if args.strict else ("loose" if args.loose else "default")
+    command = _resolve_interpreter([sys.executable] + list(trace.header.argv))
+
+    env = dict(os.environ)
+    env.update({
+        "REELTIME_AUTOINSTALL": "1",
+        "REELTIME_MODE": "replay",
+        "REELTIME_REPLAY": trace.run_id,
+        "REELTIME_STRICTNESS": strictness,
+        "REELTIME_ANNOUNCE": "1",
+        "TAPE_DIR": str(tape_dir),
+    })
+    if args.to is not None:
+        env["REELTIME_STOP_AT"] = str(args.to)
+    if args.realtime:
+        env["REELTIME_REALTIME"] = "1"
+    if args.step:
+        env["REELTIME_STEP"] = "1"
+    bootstrap = str(Path(__file__).resolve().parent / "_bootstrap")
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = bootstrap + (os.pathsep + existing if existing else "")
+
+    cwd = trace.header.cwd if os.path.isdir(trace.header.cwd or "") else None
+    if cwd is None and trace.header.cwd:
+        sys.stderr.write(
+            "tape replay: recorded working directory {} is gone; running here "
+            "instead\n".format(trace.header.cwd)
+        )
+
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(command, env=env, cwd=cwd)
+    except FileNotFoundError:
+        sys.stderr.write("tape replay: cannot re-run {}\n".format(command[0]))
+        return 127
+    elapsed = time.perf_counter() - started
+
+    original = (trace.footer or {}).get("dur_s")
+    if original:
+        sys.stderr.write(
+            "  wall clock {:.2f}s vs {:.2f}s recorded ({:.0f}× faster, $0.00)\n".format(
+                elapsed, original, original / elapsed if elapsed else 0.0)
+        )
+    return completed.returncode
+
+
 # -- tape ls -------------------------------------------------------------
 
 
@@ -303,6 +363,21 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("command", nargs=argparse.REMAINDER,
                      help="the command to run, e.g. python agent.py")
     run.set_defaults(func=cmd_run)
+
+    replay = sub.add_parser("replay", help="re-run a recorded command offline")
+    replay.add_argument("run", help="run id, or any unambiguous prefix")
+    replay.add_argument("--to", type=int, metavar="N",
+                        help="stop after event N")
+    replay.add_argument("--step", action="store_true",
+                        help="pause before each event (interactive)")
+    replay.add_argument("--realtime", action="store_true",
+                        help="re-emit stream chunks with their recorded delays")
+    strictness = replay.add_mutually_exclusive_group()
+    strictness.add_argument("--strict", action="store_true",
+                            help="only exact matches (tier 1)")
+    strictness.add_argument("--loose", action="store_true",
+                            help="also match on content hash alone (tier 3)")
+    replay.set_defaults(func=cmd_replay)
 
     ls = sub.add_parser("ls", help="list recorded runs, newest first")
     ls.add_argument("-n", "--limit", type=int, default=20)

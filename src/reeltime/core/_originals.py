@@ -17,6 +17,7 @@ import uuid as _uuid
 time = _time.time
 monotonic = _time.monotonic
 perf_counter = _time.perf_counter
+sleep = _time.sleep
 
 datetime_cls = _datetime.datetime
 timezone = _datetime.timezone

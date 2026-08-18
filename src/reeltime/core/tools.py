@@ -24,6 +24,7 @@ import functools
 import inspect
 from typing import Any, Callable, Dict, Mapping, Optional, TypeVar
 
+from ..errors import ReplayedError
 from .tape import current
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -47,12 +48,38 @@ def _bind(fn: Callable[..., Any], args: tuple, kwargs: dict) -> Dict[str, Any]:
     return values
 
 
-def _recorder():
+def _engine():
     tape = current()
     if tape is None or tape.closed:
         return None
-    recorder = tape.recorder
-    return recorder if recorder.enabled else None
+    engine = tape.engine
+    return engine if engine.enabled else None
+
+
+def _rebuild_error(error: Dict[str, Any]) -> BaseException:
+    """Raise again what the tool raised when it was recorded.
+
+    The agent reacted to that exception -- retried, fell back, gave up -- so a
+    replay in which the call quietly succeeds is a replay of a different run.
+    Builtin types are rebuilt exactly; anything else becomes a named
+    :class:`ReplayedError` rather than a lie about the type.
+    """
+    import builtins
+
+    name = error.get("type", "Exception")
+    message = error.get("message", "")
+    candidate = getattr(builtins, name, None)
+    if isinstance(candidate, type) and issubclass(candidate, BaseException):
+        return candidate(message)
+    return type(name, (ReplayedError,), {})(message)
+
+
+def _replayed_result(engine: Any, event: Any) -> Any:
+    error = event.meta.get("error")
+    if error:
+        raise _rebuild_error(error)
+    res = engine.resolved(event, event.res) or {}
+    return res.get("value")
 
 
 def wrap(fn: F, name: Optional[str] = None) -> F:
@@ -63,11 +90,18 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
 
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            recorder = _recorder()
-            if recorder is None:
+            engine = _engine()
+            if engine is None:
                 return await fn(*args, **kwargs)
             request = {"name": tool_name, "args": _bind(fn, args, kwargs)}
-            with recorder.capture("tool", request) as event:
+            if engine.replaying:
+                event = engine.consume("tool", request)
+                if event is not None:
+                    # The body never runs: that is what makes replaying an
+                    # agent that deletes files or charges cards safe.
+                    return _replayed_result(engine, event)
+                return await fn(*args, **kwargs)
+            with engine.capture("tool", request) as event:
                 result = await fn(*args, **kwargs)
                 event.res = {"value": result}
                 return result
@@ -77,11 +111,16 @@ def wrap(fn: F, name: Optional[str] = None) -> F:
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        recorder = _recorder()
-        if recorder is None:
+        engine = _engine()
+        if engine is None:
             return fn(*args, **kwargs)
         request = {"name": tool_name, "args": _bind(fn, args, kwargs)}
-        with recorder.capture("tool", request) as event:
+        if engine.replaying:
+            event = engine.consume("tool", request)
+            if event is not None:
+                return _replayed_result(engine, event)
+            return fn(*args, **kwargs)
+        with engine.capture("tool", request) as event:
             result = fn(*args, **kwargs)
             event.res = {"value": result}
             return result

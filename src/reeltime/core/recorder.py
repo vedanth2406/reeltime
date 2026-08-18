@@ -124,6 +124,9 @@ class Capture:
 class Recorder:
     """Writes events for one run."""
 
+    #: Lets the interception layer branch without importing either class.
+    replaying = False
+
     def __init__(
         self,
         writer: TraceWriter,
@@ -311,6 +314,12 @@ class Recorder:
                     t_rel=t_rel,
                     dur_ms=(_originals.perf_counter() - started) * 1000.0,
                 )
+
+    def resolved(self, event: Event, payload: Optional[Dict[str, Any]]) -> Any:
+        """Mirror of :meth:`Player.resolved`, so callers need not branch."""
+        if payload is None:
+            return None
+        return self.blobs.resolve(payload)
 
     # -- teardown --------------------------------------------------------
 

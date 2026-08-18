@@ -25,7 +25,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from .. import _originals, callsite
 from ..recorder import Recorder, boundary, in_boundary
-from . import common
+from . import common, replay as replay_support
 
 _SENTINEL = object()
 
@@ -64,6 +64,7 @@ def _response_payload(
     headers: Sequence,
     chunks: List[bytes],
     *,
+    offsets: Optional[List[float]] = None,
     aborted: bool = False,
 ) -> Dict[str, Any]:
     pairs = common.header_pairs(headers)
@@ -74,7 +75,7 @@ def _response_payload(
     if common.is_stream_content_type(common.content_type_of(pairs)):
         # Chunk boundaries are the data for a stream, so keep the ordered list
         # rather than the assembled body.
-        payload["stream"] = common.encode_chunks(chunks)
+        payload["stream"] = common.encode_chunks(chunks, offsets)
     else:
         payload["body"] = common.encode_body(b"".join(chunks))
     if aborted:
@@ -89,11 +90,17 @@ class _RecordingByteStream:
     caller abandons half way through still leaves a record of what arrived.
     """
 
-    def __init__(self, inner: Any, finish) -> None:
+    def __init__(self, inner: Any, finish, started: float) -> None:
         self._inner = inner
         self._finish = finish
+        self._started = started
         self._chunks: List[bytes] = []
+        self._offsets: List[float] = []
         self._done = False
+
+    def _mark(self, chunk: bytes) -> None:
+        self._chunks.append(chunk)
+        self._offsets.append((_originals.perf_counter() - self._started) * 1000.0)
 
     def __iter__(self) -> Iterator[bytes]:
         iterator = iter(self._inner)
@@ -105,7 +112,7 @@ class _RecordingByteStream:
                     chunk = next(iterator, _SENTINEL)
                 if chunk is _SENTINEL:
                     break
-                self._chunks.append(chunk)
+                self._mark(chunk)
                 yield chunk
         finally:
             self._complete(aborted=False)
@@ -123,7 +130,7 @@ class _RecordingByteStream:
         if self._done:
             return
         self._done = True
-        self._finish(self._chunks, aborted and not self._chunks)
+        self._finish(self._chunks, self._offsets, aborted and not self._chunks)
 
 
 class _AsyncRecordingByteStream(_RecordingByteStream):
@@ -136,7 +143,7 @@ class _AsyncRecordingByteStream(_RecordingByteStream):
                         chunk = await iterator.__anext__()
                     except StopAsyncIteration:
                         break
-                self._chunks.append(chunk)
+                self._mark(chunk)
                 yield chunk
         finally:
             self._complete(aborted=False)
@@ -154,12 +161,13 @@ class _AsyncRecordingByteStream(_RecordingByteStream):
 def _make_recorder_callback(recorder: Recorder, request: Any, started: float, site, span):
     request_payload = _request_payload(recorder, request)
 
-    def finish(chunks: List[bytes], aborted: bool) -> None:
+    def finish(chunks: List[bytes], offsets: List[float], aborted: bool) -> None:
         recorder.record(
             "http",
             request_payload,
             _response_payload(
-                recorder, finish.status_code, finish.headers, chunks, aborted=aborted
+                recorder, finish.status_code, finish.headers, chunks,
+                offsets=offsets, aborted=aborted,
             ),
             site=site,
             span=span,
@@ -199,10 +207,13 @@ class HttpxShim:
 
     ``module_name`` is ``"httpx"`` or ``"httpx2"``; both expose the same
     ``Client._transport_for_url`` hook and the same byte-stream ABCs.
+
+    The same patch serves replay: in that mode the wrapped transport never
+    calls the one underneath it, and answers from the tape instead.
     """
 
-    def __init__(self, recorder: Recorder, module_name: str = "httpx") -> None:
-        self.recorder = recorder
+    def __init__(self, engine: Any, module_name: str = "httpx") -> None:
+        self.engine = engine
         self.module_name = module_name
         self._restores: List = []
 
@@ -212,7 +223,7 @@ class HttpxShim:
         except ImportError:
             return False
 
-        recorder = self.recorder
+        recorder = self.engine
         original_sync = httpx.Client._transport_for_url
         original_async = httpx.AsyncClient._transport_for_url
 
@@ -226,12 +237,55 @@ class HttpxShim:
         class AsyncStream(_AsyncRecordingByteStream, httpx.AsyncByteStream):
             pass
 
+        class ReplayStream(replay_support.ReplayedByteStream, httpx.SyncByteStream):
+            pass
+
+        class AsyncReplayStream(replay_support.ReplayedByteStream, httpx.AsyncByteStream):
+            pass
+
+        def replayed_response(event):
+            """Rebuild the recorded exchange, or re-raise what it recorded."""
+            error = replay_support.recorded_error(event, httpx)
+            if error is not None:
+                raise error
+            res = recorder.resolved(event, event.res) or {}
+            headers = replay_support.response_headers(res)
+            status = res.get("status", 200)
+            if replay_support.is_stream(res):
+                chunks, delays = replay_support.stream_parts(res, recorder.realtime)
+                return httpx.Response(status, headers=headers,
+                                      stream=ReplayStream(chunks, delays))
+            return httpx.Response(status, headers=headers,
+                                  content=common.decode_body(res.get("body")))
+
+        def replayed_async_response(event):
+            error = replay_support.recorded_error(event, httpx)
+            if error is not None:
+                raise error
+            res = recorder.resolved(event, event.res) or {}
+            headers = replay_support.response_headers(res)
+            status = res.get("status", 200)
+            if replay_support.is_stream(res):
+                chunks, delays = replay_support.stream_parts(res, recorder.realtime)
+                return httpx.Response(status, headers=headers,
+                                      stream=AsyncReplayStream(chunks, delays))
+            return httpx.Response(status, headers=headers,
+                                  content=common.decode_body(res.get("body")))
+
         class RecordingTransport(httpx.BaseTransport):
             def __init__(self, inner: Any) -> None:
                 self._inner = inner
 
             def handle_request(self, request):
                 if not recorder.enabled or in_boundary():
+                    return self._inner.handle_request(request)
+                if recorder.replaying:
+                    # Never reaches self._inner: replay makes no network calls.
+                    event = recorder.consume(
+                        "http", _request_payload(recorder, request),
+                        site=callsite.caller(1, skip_libraries=True))
+                    if event is not None:
+                        return replayed_response(event)
                     return self._inner.handle_request(request)
                 started = _originals.perf_counter()
                 site = callsite.caller(1, skip_libraries=True)
@@ -245,7 +299,7 @@ class HttpxShim:
                 finish.status_code = response.status_code
                 finish.headers = response.headers
                 finish.meta = _extensions_meta(response.extensions)
-                stream = SyncStream(response.stream, finish)
+                stream = SyncStream(response.stream, finish, started)
                 return httpx.Response(
                     response.status_code,
                     headers=response.headers,
@@ -263,6 +317,13 @@ class HttpxShim:
             async def handle_async_request(self, request):
                 if not recorder.enabled or in_boundary():
                     return await self._inner.handle_async_request(request)
+                if recorder.replaying:
+                    event = recorder.consume(
+                        "http", _request_payload(recorder, request),
+                        site=callsite.caller(1, skip_libraries=True))
+                    if event is not None:
+                        return replayed_async_response(event)
+                    return await self._inner.handle_async_request(request)
                 started = _originals.perf_counter()
                 site = callsite.caller(1, skip_libraries=True)
                 finish = _make_recorder_callback(recorder, request, started, site, None)
@@ -275,7 +336,7 @@ class HttpxShim:
                 finish.status_code = response.status_code
                 finish.headers = response.headers
                 finish.meta = _extensions_meta(response.extensions)
-                stream = AsyncStream(response.stream, finish)
+                stream = AsyncStream(response.stream, finish, started)
                 return httpx.Response(
                     response.status_code,
                     headers=response.headers,
