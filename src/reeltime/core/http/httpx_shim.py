@@ -422,10 +422,13 @@ class HttpxShim:
                 await self._inner.aclose()
 
         def transport_for_url(client, url):
-            return RecordingTransport(original_sync(client, url))
+            inner = original_sync(client, url)
+            # Already recorded at a higher level -- see common.own_endpoint.
+            return inner if common.is_owned(url) else RecordingTransport(inner)
 
         def async_transport_for_url(client, url):
-            return AsyncRecordingTransport(original_async(client, url))
+            inner = original_async(client, url)
+            return inner if common.is_owned(url) else AsyncRecordingTransport(inner)
 
         httpx.Client._transport_for_url = transport_for_url
         httpx.AsyncClient._transport_for_url = async_transport_for_url

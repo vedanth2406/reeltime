@@ -52,7 +52,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..errors import TapeConfigError
 
-KINDS = ("llm", "tool", "http")
+KINDS = ("llm", "tool", "http", "mcp")
 
 #: field -> whether it substitutes a result instead of rewriting a request
 REQUEST_FIELDS = {
@@ -64,6 +64,11 @@ RESULT_FIELDS = {
     "llm": ("response",),
     "tool": ("result",),
     "http": ("body_response",),
+    # An MCP call is a tool call over a wire, so it patches like one. There is
+    # deliberately no request field: rewriting an outgoing body is an HTTP-shaped
+    # operation, and `mcp.read_file.args=` would have to be either implemented
+    # or silently ignored -- so it is rejected instead.
+    "mcp": ("result",),
 }
 
 OPERATORS = ("+=", "~=", "=")

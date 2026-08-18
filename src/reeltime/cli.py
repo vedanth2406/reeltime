@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from . import __version__
 from .core import context, fmt, ids, paths, tracediff
+from .core import mcp as mcp_mod
 from .core.blobs import BlobStore
 from .core.fork import check_patches, missing_credentials
 from .core.patch import parse_all as parse_patches
@@ -31,7 +32,6 @@ from .errors import TapeError
 #: are the only places that promise anything, so they must not drift apart.
 #: Entries that are not subcommands say so in their name ("mcp adapter").
 PLANNED = (
-    ("mcp adapter", "record tools/list and tools/call as first-class events", "M5.5"),
     ("doctor", "find a run's nondeterminism sources", "M7"),
 )
 
@@ -108,7 +108,99 @@ def _summarise(event: Event) -> str:
             _truncate(json.dumps(req.get("args", {}))[1:-1], 40),
             _truncate(json.dumps(res.get("value")), 40),
         )
+    if event.kind == "mcp":
+        return _summarise_mcp(event)
     return "{} = {}".format(req.get("name", event.kind), _truncate(json.dumps(res)[:80], 60))
+
+
+def _summarise_mcp(event: Event) -> str:
+    """One line for an MCP event, naming the server and what was asked of it."""
+    req, res = event.req, event.res or {}
+    server, op = req.get("server", "?"), req.get("op")
+    error = event.meta.get("error")
+    if op == mcp_mod.OP_INIT:
+        outcome = error.get("type") if error else "{} {}".format(
+            res.get("server_name") or "?", res.get("server_version") or "")
+        return "{} initialize → {}".format(server, outcome.strip())
+    if op == mcp_mod.OP_LIST:
+        if error:
+            return "{} tools/list raised {}".format(server, error.get("type"))
+        names = res.get("tools") or []
+        return "{} tools/list → {} tools: {}".format(
+            server, res.get("count", len(names)), _truncate(", ".join(names), 44))
+    if error:
+        return "{}·{}(…) raised {}".format(server, req.get("name", "?"), error.get("type"))
+    marker = " [tool error]" if res.get("is_error") else ""
+    return "{}·{}({}) → {}{}".format(
+        server, req.get("name", "?"),
+        _truncate(json.dumps(req.get("args", {}), default=str)[1:-1], 30),
+        _truncate(json.dumps(res.get("value"), default=str), 34), marker)
+
+
+def _render_mcp(event: Event, resolved: Dict[str, Any]) -> str:
+    """An MCP event as prose rather than as JSON-RPC.
+
+    ``tape show N`` prints raw JSON for every other kind, and for HTTP that is
+    the right answer -- the payload *is* the thing. An MCP event is not: server,
+    tool, arguments and result are four named fields, and burying them in a
+    nested wire envelope would give back exactly the opacity this milestone
+    exists to remove. ``--raw`` still prints the JSON.
+    """
+    req = resolved.get("req") or {}
+    res = resolved.get("res") or {}
+    op = req.get("op")
+    out = ["mcp · event {} · {} · {}".format(
+        event.i, req.get("server", "?"), event.site)]
+    if event.dur_ms:
+        out[0] += "  ({:.0f}ms)".format(event.dur_ms)
+
+    error = event.meta.get("error")
+    if op == mcp_mod.OP_INIT:
+        out.append("")
+        out.append("  initialize")
+        out.append("  server       {} {}".format(
+            res.get("server_name") or "?", res.get("server_version") or ""))
+        out.append("  protocol     {}".format(res.get("protocol") or "?"))
+        out.append("  capabilities {}".format(
+            ", ".join(res.get("capabilities") or []) or "none"))
+    elif op == mcp_mod.OP_LIST:
+        out.append("")
+        out.append("  tools/list → {} tools".format(res.get("count", 0)))
+        for tool_def in ((res.get("result") or {}).get("tools") or []):
+            out.append("    {:<24} {}".format(
+                tool_def.get("name", "?"),
+                _truncate(tool_def.get("description") or "", 50)))
+            schema = tool_def.get("inputSchema") or {}
+            params = schema.get("properties") or {}
+            if params:
+                required = set(schema.get("required") or [])
+                out.append("      ({})".format(", ".join(
+                    "{}{}: {}".format(k, "" if k in required else "?",
+                                      (v or {}).get("type", "any"))
+                    for k, v in params.items())))
+    else:
+        out.append("")
+        out.append("  tool   {}".format(req.get("name", "?")))
+        out.append("  args   {}".format(
+            json.dumps(req.get("args", {}), ensure_ascii=False, default=str)))
+        if res.get("is_error"):
+            out.append("  result the server reported a tool error")
+        value = res.get("value")
+        rendered = value if isinstance(value, str) else json.dumps(
+            value, indent=2, ensure_ascii=False, default=str)
+        out.append("  result {}".format(_indent_after_first(rendered, 9)))
+
+    if error:
+        out.append("  raised {}: {}".format(error.get("type"), error.get("message")))
+    out.append("")
+    out.append("(--raw prints the recorded JSON, wire envelope included)")
+    return "\n".join(out) + "\n"
+
+
+def _indent_after_first(text: str, width: int) -> str:
+    lines = text.splitlines() or [""]
+    pad = " " * width
+    return "\n".join([lines[0]] + [pad + line for line in lines[1:]])
 
 
 # -- tape run ------------------------------------------------------------
@@ -572,6 +664,9 @@ def cmd_show(args: argparse.Namespace) -> int:
         # Blob references are an encoding detail; showing an event means
         # showing what was actually sent and received.
         resolved = blobs.resolve(resolved)
+        if event.kind == "mcp":
+            sys.stdout.write(_render_mcp(event, resolved))
+            return 0
     print(json.dumps(resolved, indent=2, ensure_ascii=False))
     return 0
 
@@ -619,7 +714,8 @@ def build_parser() -> argparse.ArgumentParser:
     diff_cmd.add_argument("a", help="the earlier run: id, prefix, or 'last'")
     diff_cmd.add_argument("b", help="the later run: id, prefix, or 'last'")
     diff_cmd.add_argument("--only", action="append", metavar="KIND",
-                          help="compare only these kinds (llm, tool, http; repeatable)")
+                          help="compare only these kinds (llm, tool, http, mcp, "
+                               "rand, time, uuid; repeatable)")
     diff_cmd.add_argument("--json", action="store_true",
                           help="machine-readable output")
     diff_cmd.set_defaults(func=cmd_diff)

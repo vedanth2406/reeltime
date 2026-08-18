@@ -53,7 +53,7 @@ cassette, not the wire).
 | Survives a one-character prompt change | **No** — `UnmatchedInteractionError` | Yes — tier 2 match + drift annotation |
 | Fork from step N with a modified event | **No.** No fork, no `--to N`, no stepper, no pdb hook, no resume. Zero step-based controls anywhere in the codebase | M5 |
 | Diffs two traces | **Yes, and it is good** — `difflib.SequenceMatcher` over per-step signatures, plus field-level paths (`request.json.messages[0].content: 'x' -> 'y'`) | M6 |
-| Records MCP sessions | **No.** An `mcp>=1.9` extra is declared in the metadata but there is not a single occurrence of "mcp" in the source | M9 |
+| Records MCP sessions | **No.** An `mcp>=1.9` extra is declared in the metadata but there is not a single occurrence of "mcp" in the source | **Shipped (M5.5)** — `mcp` events, stdio and HTTP/SSE, tool-set diff |
 | Ambient nondeterminism | **Frozen, not recorded.** `random.seed(0)`, a pinned base clock, and UUIDs from a fixed namespace — during *recording* too | Recorded: real values, per call site, replayed back |
 | Overhead | ~15.9 µs/call recording, ~17.6 µs/call replaying, 454 B/interaction (YAML) | ~20–28 µs/ambient call, 184 B/event (JSONL) |
 
@@ -132,7 +132,7 @@ request, a field-level diff of the two, and four concrete ways to fix it.
 
 Ordered by how much they change the plan.
 
-### 1. Move MCP forward, out of M9 — do it right after M5
+### 1. Move MCP forward, out of M9 — do it right after M5 — **done**
 
 It is the one capability they have publicly *signalled* (an `mcp` extra in
 published metadata) and not built. That is a countdown clock, not an open
@@ -140,6 +140,10 @@ field. MCP is also cheap for us: §4.4 is a client-session wrapper over
 machinery M2 already builds. Being demonstrably first is worth more than the
 LangChain adapter it currently shares a milestone with. **Split M9: MCP becomes
 M5.5; the LangChain adapter stays late.**
+
+**Shipped 2026-08-18**, unreleased at the time of writing. The countdown was
+real and the ground is still unclaimed: the extra in their metadata still has
+no code behind it.
 
 ### 2. Demote the web UI (M8) below everything else
 

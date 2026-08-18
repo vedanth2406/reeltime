@@ -244,9 +244,17 @@ def test_the_multi_tool_example_replays_its_random_choice(tmp_path, server):
 # -- the examples stand alone -------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "name", ["openai_agent.py", "anthropic_agent.py", "multi_tool_agent.py"]
-)
+#: Read off the directory rather than listed by hand, so an example added
+#: later is covered by default instead of by remembering.
+ALL_EXAMPLES = sorted(path.name for path in EXAMPLES.glob("*.py"))
+
+
+def test_the_example_list_is_not_empty():
+    """A glob that stops matching would turn the test below into a no-op."""
+    assert len(ALL_EXAMPLES) >= 6, ALL_EXAMPLES
+
+
+@pytest.mark.parametrize("name", ALL_EXAMPLES)
 def test_every_example_compiles(name):
     subprocess.run([sys.executable, "-m", "py_compile", str(EXAMPLES / name)],
                    check=True)

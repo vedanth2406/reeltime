@@ -3,6 +3,46 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MCP sessions are recorded as `mcp` events**, not as opaque HTTP. Server
+  identity, tool name, and arguments are named fields, and `tools/list` is
+  recorded too: a server that exposes a different tool set between two runs
+  changes what the agent can attempt at all, and that belongs in the trace
+  rather than showing up later as an unattributable divergence.
+  `tape.mcp.connect(...)` opens the session, over stdio or over HTTP (SSE and
+  streamable HTTP both). `tape.mcp.wrap(session, server=...)` records a session
+  you opened yourself.
+- **Replay does not start the server.** A pure replay opens no subprocess and
+  contacts no URL; every call is served from the tape, and one that is not
+  recorded raises `TapeMiss` rather than quietly going live. A fork does start
+  it, because a fork continues for real past its fork point.
+- **`tape show N` renders an MCP event as prose** — server, tool, arguments,
+  result, and for a discovery event the tool list with its schemas. `--raw`
+  still prints the JSON.
+- **`tape diff` reports a changed tool set on its own line**, naming what
+  appeared and what went away, rather than diffing an opaque payload. Same tool
+  names with different schemas are reported separately, which content
+  addressing answers without either payload being read.
+- **`mcp` folds into `http` for alignment**, the way `llm` does, so a session
+  recorded before this adapter existed still lines up against one recorded
+  since. `--only` is deliberately *not* folded: `--only mcp` means MCP events.
+- `--patch mcp.<tool>.result=…` substitutes an MCP result in a fork, exactly as
+  `tool.<name>.result=` does for a local tool.
+- `examples/mcp_agent.py` and `examples/mcp_server.py`: a mock MCP server over
+  stdio, no credentials and no network, driven by the test suite. Recording it
+  twice with `MCP_EXAMPLE_TOOLS=extended` and diffing the two runs is the
+  changed-tool-set report end to end.
+
+### Fixed
+
+- An MCP server started over stdio no longer inherits the recording
+  environment. It is a subprocess of a recorded agent, so `REELTIME_RUN_ID`
+  would have had it open the *same* trace file and append its own header and
+  events to a run it is not part of.
+
 ## [0.3.0] — 2026-08-18
 
 ### Added

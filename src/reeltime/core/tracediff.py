@@ -23,7 +23,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import context as context_mod
 from .fmt import usd
-from .matching import kind_key
+from . import mcp as mcp_mod
+from .matching import filter_kinds, kind_key
 from .trace import Event, Trace
 
 SAME = "same"
@@ -40,7 +41,9 @@ def signature(event: Event) -> Tuple[str, str, str]:
 
     ``llm`` folds into ``http``: the label is something a decoder applies after
     the fact, and a run recorded before that decoder existed should still line
-    up against one recorded after it.
+    up against one recorded after it. ``mcp`` folds in for the same reason --
+    before the adapter, an MCP call over HTTP was recorded as opaque http at
+    this very call site.
     """
     return (kind_key(event.kind), event.site, event.name or "")
 
@@ -211,8 +214,8 @@ def diff(a: Trace, b: Trace, only: Optional[Sequence[str]] = None) -> TraceDiff:
 def _filter(events: Sequence[Event], only: Optional[Sequence[str]]) -> List[Event]:
     if not only:
         return list(events)
-    wanted = {kind_key(k) for k in only}
-    return [e for e in events if kind_key(e.kind) in wanted]
+    wanted = filter_kinds(only)
+    return [e for e in events if e.kind in wanted]
 
 
 # -- describing one paired step ------------------------------------------
@@ -230,10 +233,12 @@ def describe(a: Event, b: Event) -> List[Change]:
 
     if a.name != b.name:
         changes.append(Change("call", _call_of(a), _call_of(b)))
-    elif kind_key(a.kind) == "tool" and (a.req.get("args") != b.req.get("args")):
+    elif a.kind in ("tool", "mcp") and (a.req.get("args") != b.req.get("args")):
         changes.append(Change("arguments", _call_of(a), _call_of(b)))
 
-    if kind_key(a.kind) == "http":
+    if a.kind == "mcp" or b.kind == "mcp":
+        changes.extend(_mcp_changes(a, b))
+    elif kind_key(a.kind) == "http":
         changes.extend(_llm_changes(a, b))
 
     for label, before, after in (
@@ -260,6 +265,48 @@ def _call_of(event: Event) -> str:
     else:
         inner = _short(args, 40)
     return "{}({})".format(name, inner)
+
+
+def _mcp_changes(a: Event, b: Event) -> List[Change]:
+    """Differences between two MCP steps.
+
+    The one that matters is the tool set. A server exposing a different set of
+    tools between two runs changes what the agent is able to attempt at all, so
+    it gets its own line naming what appeared and what went away -- not a
+    content diff on a payload, which is what it would degrade to if the
+    discovery result were treated as opaque bytes.
+    """
+    changes: List[Change] = []
+    if a.req.get("server") != b.req.get("server"):
+        changes.append(Change("server", a.req.get("server"), b.req.get("server")))
+
+    before, after = mcp_mod.tool_names(a), mcp_mod.tool_names(b)
+    if before is not None and after is not None:
+        gone = [n for n in before if n not in after]
+        new = [n for n in after if n not in before]
+        if gone or new:
+            lines = ["- " + n for n in gone] + ["+ " + n for n in new]
+            changes.append(Change(
+                "tool set changed",
+                before="{} tools".format(len(before)),
+                after="{} tools".format(len(after)),
+                lines=lines,
+            ))
+        elif mcp_mod.definitions_ref(a) != mcp_mod.definitions_ref(b):
+            # Same names, different definitions. Content addressing answers
+            # this without either payload being read: two runs whose
+            # definitions externalised to the same hash recorded the same
+            # schemas.
+            changes.append(Change(
+                "tool definitions changed",
+                before="{} tools, same names".format(len(before)),
+                after="descriptions or schemas differ",
+            ))
+
+    error_a, error_b = (a.res or {}).get("is_error"), (b.res or {}).get("is_error")
+    if error_a != error_b:
+        changes.append(Change("tool error", error_a, error_b))
+    return changes
 
 
 def _llm_changes(a: Event, b: Event) -> List[Change]:

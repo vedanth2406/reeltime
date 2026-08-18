@@ -161,3 +161,44 @@ def content_type_of(headers: Sequence[Tuple[str, str]]) -> Optional[str]:
         if key.lower() == "content-type":
             return value
     return None
+
+
+# -- boundaries another adapter already owns -----------------------------
+#
+# An MCP session over the HTTP transport is recorded as `mcp` events, and the
+# transport's own POST underneath is not a second boundary crossing. Nesting
+# normally handles that -- the outermost boundary is the one recorded -- but
+# the MCP SDK issues its requests from a task it spawned when the connection
+# opened, and the boundary flag is a contextvar, so it was copied before any
+# boundary existed and never reaches the request.
+#
+# So the owning adapter registers its endpoint instead. The shim consults this
+# where it already has the URL in hand, and hands back an unwrapped transport.
+
+_OWNED_PREFIXES: List[str] = []
+
+
+def own_endpoint(url: str) -> None:
+    """Claim ``url`` and everything under it for a higher-level adapter."""
+    if url:
+        _OWNED_PREFIXES.append(url)
+
+
+def release_endpoint(url: str) -> None:
+    """Give ``url`` back. Removes one claim, so nesting the same URL works."""
+    try:
+        _OWNED_PREFIXES.remove(url)
+    except ValueError:  # pragma: no cover - defensive
+        pass
+
+
+def is_owned(url: Any) -> bool:
+    """Whether this request is already being recorded as something else."""
+    if not _OWNED_PREFIXES:
+        return False
+    text = str(url)
+    return any(text.startswith(prefix) for prefix in _OWNED_PREFIXES)
+
+
+def _reset_owned_for_tests() -> None:
+    _OWNED_PREFIXES.clear()

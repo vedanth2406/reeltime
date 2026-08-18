@@ -571,3 +571,6 @@ def _reset_for_tests() -> None:
     _scoped.set(None)
     _extra_patterns.clear()
     spans.reset()
+    from .http import common as http_common
+
+    http_common._reset_owned_for_tests()

@@ -55,11 +55,33 @@ MAX_TIER = {STRICT: 1, DEFAULT: 2, LOOSE: 3}
 #: different boundary. The transport asks for ``http`` on both sides, so
 #: matching folds the two together -- otherwise every decoded LLM call would
 #: miss its own recording.
-EQUIVALENT_KINDS = {"llm": "http"}
+#:
+#: ``mcp`` folds in for the same reason, one milestone later. Before the MCP
+#: adapter existed, an MCP call over the HTTP transport was recorded as an
+#: opaque ``http`` event at the same call site; folding is what lets such a run
+#: still line up against one recorded since, so the report is "this step
+#: changed" rather than "these two runs share nothing".
+EQUIVALENT_KINDS = {"llm": "http", "mcp": "http"}
+
+#: What ``--only <kind>`` expands to, which is *not* the same question.
+#: Folding exists so unlike events can be aligned; filtering exists so a user
+#: can ask for one thing and get it. Asking for ``http`` still includes ``llm``,
+#: because an llm event is an http event wearing a label -- but an ``mcp`` event
+#: is a boundary of its own, and over the stdio transport there is no HTTP
+#: anywhere in it.
+FILTER_ALIASES = {"http": ("http", "llm")}
 
 
 def kind_key(kind: str) -> str:
     return EQUIVALENT_KINDS.get(kind, kind)
+
+
+def filter_kinds(only: Sequence[str]) -> set:
+    """The literal event kinds ``--only`` should select."""
+    wanted = set()
+    for kind in only:
+        wanted.update(FILTER_ALIASES.get(kind, (kind,)))
+    return wanted
 
 
 #: Per kind, the request fields that identify the call. Deliberately narrow:
@@ -70,7 +92,9 @@ CONTENT_FIELDS = {
     "http": ("method", "url", "body"),
     "llm": ("method", "url", "body"),
     "tool": ("name", "args"),
-    "mcp": ("server", "name", "args"),
+    # ``op`` separates the handshake and the discovery call from a tool that
+    # happens to be named ``initialize``, without giving them a kind each.
+    "mcp": ("server", "op", "name", "args"),
     "rand": ("name", "args", "kwargs", "n"),
     "time": ("name", "tz"),
     "uuid": ("name",),

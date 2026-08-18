@@ -84,6 +84,10 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
   where it is long, and diffs it between two calls so an injection or a
   truncation is impossible to miss. Most agent bugs are context bugs, and
   nothing else surfaces the exact bytes.
+- **MCP sessions are recorded as MCP**, with server, tool, and arguments as
+  fields — tool discovery included, so a server that changed what it offers
+  shows up as a tool set change rather than as a mystery divergence. Replay
+  never starts the server. Nothing else records MCP at all.
 - **Fork a run from any step, with the fix applied.** `tape fork <run> --at 13
   --patch 'llm.system+="Ask first."'` replays the first 13 events — free and
   identical — then goes live from there. Testing a prompt change costs one
@@ -360,6 +364,65 @@ same structure as data, divergence point included.
 Forks are the natural thing to diff: fork a run with one patch, then compare the
 two and read what that one change did.
 
+## MCP sessions
+
+An agent that talks to an MCP server crosses a boundary at every `tools/call`,
+and at every `tools/list` too. Recorded as opaque HTTP, a run where the server
+offered a different tool set is unattributable: the agent simply did something
+else and nothing says why. So MCP gets its own event kind.
+
+```python
+import reeltime as tape
+
+async with tape.mcp.connect("python", ["server.py"], server="files") as session:
+    tools = await session.list_tools()
+    result = await session.call_tool("read_file", {"path": "a.txt"})
+```
+
+Both transports: `command=`/`args=` for stdio, `url=` for HTTP — streamable
+HTTP by default, SSE with `transport="sse"`. `tape.mcp.wrap(session, server=…)`
+records a session you opened yourself.
+
+```console
+$ tape show last
+   0  mcp      261ms  agent.py:33   files initialize → example-files 1.0.0
+   1  mcp        1ms  agent.py:40   files tools/list → 2 tools: list_files, read_file
+   2  mcp        1ms  agent.py:44   files·list_files() → "invoice.pdf\nnotes.txt…
+   3  mcp       23ms  agent.py:47   files·read_file("path": "notes.txt") → "buy milk…
+
+$ tape show last 1
+mcp · event 1 · files · agent.py:40  (1ms)
+
+  tools/list → 2 tools
+    list_files               List the files available on this server.
+    read_file                Read one file by name.
+      (path: string)
+```
+
+**Replay does not start the server.** A pure replay spawns no subprocess and
+contacts no URL — every call is served from the tape, and one that was never
+recorded raises `TapeMiss` rather than quietly going live. (A fork *does* start
+it: a fork continues for real past its fork point.)
+
+**A changed tool set is reported as a changed tool set.** Record the same agent
+against two versions of a server and the diff names the difference, instead of
+reporting that two payloads differ somewhere:
+
+```console
+$ tape diff <a> <b>
+step 1   mcp     tool set changed
+                 + delete_file
+step 4   mcp     only in B: delete_file(path=invoice.pdf)
+```
+
+The second line is the consequence of the first, which is the whole argument
+for recording discovery. `examples/mcp_agent.py` runs this end to end against a
+mock server with no credentials and no network.
+
+`mcp` folds into `http` for alignment the way `llm` does, so a session recorded
+before this adapter existed still lines up against one recorded since. `--only`
+is not folded: `--only mcp` means MCP events.
+
 ## Why interception is at the transport layer
 
 On **2026-08-18** the OpenAI Python SDK (3.2.0) is built on `httpx2` 2.10, while
@@ -432,6 +495,7 @@ Being precise about the boundary is the point.
 | Survives an edited prompt | ✅ tier 2 + drift report | ✕ hard fail | ✕ | n/a |
 | Streaming record/replay | ✅ chunk-exact | ✕ refused | partial | n/a |
 | Full context inspection | ✅ `--context`, `--diff` | inspect / timeline / HTML viewer | ✕ | ✅ in the UI |
+| MCP sessions as first-class events | ✅ both transports, tool-set diff | ✕ (an `mcp` extra with no code behind it) | ✕ | ✕ |
 | Keeps the trace when the run crashes | ✅ flushed per event | ✕ discards it | n/a | ✅ |
 | Ambient nondeterminism | recorded, per call site | *frozen* (seeded, pinned clock) | ✕ | ✕ |
 | Step controls (`--to`, `--step`) | ✅ | ✕ | ✕ | ✕ |
@@ -499,9 +563,10 @@ tape.install(
 
 ## Examples
 
-Three runnable agents, all covered by the test suite — see
-[examples/](examples/). The two SDK examples import nothing from reeltime,
-which is the zero-edit claim made concrete.
+Runnable agents, all covered by the test suite — see [examples/](examples/).
+The two SDK examples import nothing from reeltime, which is the zero-edit claim
+made concrete. `mcp_agent.py` needs no API key and no network: it drives the
+mock MCP server next to it.
 
 ## Roadmap
 
@@ -513,15 +578,16 @@ which is the zero-edit claim made concrete.
 | 4 | `--context`, `tape reindex`, examples, **v0.1.0** | ✅ |
 | 5 | `tape fork <run> --at N --patch …`, **v0.2.0** | ✅ |
 | 6 | `tape diff`, divergence-point reporting, **v0.3.0** | ✅ |
-| 5.5 | MCP adapter | next |
-| 7 | `tape doctor` — find a run's nondeterminism sources | |
+| 5.5 | MCP adapter — `mcp` events, both transports, tool-set diff | ✅ |
+| 7 | `tape doctor` — find a run's nondeterminism sources | next |
 | 8 | LangChain callback adapter | |
 | 9 | Overhead benchmarks, docs site | v1.0 |
 | 10 | Web UI | |
 
-MCP is next: no record/replay tool captures MCP sessions today, and a server
-that exposes a different tool set between runs is exactly the kind of thing that
-changes an agent's behaviour invisibly.
+MCP shipped early on purpose: no other record/replay tool captures MCP sessions,
+and a server that exposes a different tool set between runs is exactly the kind
+of thing that changes an agent's behaviour invisibly. See
+[MCP sessions](#mcp-sessions).
 
 ## Development
 
@@ -529,7 +595,7 @@ changes an agent's behaviour invisibly.
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 489 tests
+pytest                                  # 552 tests
 pytest --cov --cov-report=term-missing  # core/ is at 94%
 python examples/m3_replay_speed.py      # the benchmark above
 ```

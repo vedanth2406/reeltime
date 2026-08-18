@@ -120,7 +120,7 @@ def _recorded_result(event: Optional[Event], kind: str) -> Any:
     if event is None:
         return None
     res = event.res or {}
-    if kind == "tool":
+    if kind in ("tool", "mcp"):
         return res.get("value")
     return res.get("preview")
 

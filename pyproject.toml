@@ -50,6 +50,13 @@ dev = [
   "numpy>=1.26",
   # The wheel gate builds a distribution as part of the test run.
   "build>=1.0",
+  # The MCP adapter and its two transport tests. Marked rather than optional:
+  # a module-level importorskip is how `numpy` silently skipped 25 tests once,
+  # so `tests/test_mcp.py` asserts the SDK is present wherever it can install.
+  # The SDK itself requires 3.10; reeltime supports 3.9.
+  "mcp>=1.9; python_version>='3.10'",
+  # Serves the HTTP and SSE MCP fixtures on a real socket.
+  "uvicorn>=0.30; python_version>='3.10'",
 ]
 
 [project.urls]

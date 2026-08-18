@@ -19,8 +19,8 @@ Or scope it::
     print(run.summary.line())
 
 Records today: every HTTP call (httpx and requests, streaming included),
-``@tape.tool`` functions, randomness, uuids, and clock reads. Replay arrives
-in M3.
+``@tape.tool`` functions, MCP sessions (``tape.mcp.connect``), randomness,
+uuids, and clock reads.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 
 __version__ = "0.3.0"
 
+from . import mcp
 from .core.spans import span
 from .core.tape import (
     Mode,
@@ -63,6 +64,7 @@ __all__ = [
     "record_event",
     "span",
     "redact",
+    "mcp",
     "tool",
     "wrap",
     "wrap_all",
