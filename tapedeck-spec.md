@@ -320,9 +320,9 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 | **2** | httpx transport shim (sync + async), `requests` fallback, provider decoders (§4.6), redaction on the HTTP path, `@tape.tool`, **streaming chunk capture**, `tape run`, `tape ls`, `tape show` | Records real OpenAI/Anthropic agents, streaming included ✅ |
 | **3** | `Player`, three-tier matcher, `TapeMiss` errors, `tape replay --to/--step`, streaming re-emission (`--realtime`) | **Replay works — this is the core** ✅ |
 | **4** | `--context` inspection, `tape reindex`, README, PyPI publish | v0.1.0 released |
-| **5** | Fork + patch grammar, lineage tracking | `tape fork` |
+| **5** | Fork + patch grammar, lineage tracking | `tape fork` ✅ |
 | **5.5** | MCP adapter | Unclaimed ground — take it before someone else does |
-| **6** | Alignment-based diff, divergence-point reporting first | `tape diff` |
+| **6** | Alignment-based diff, divergence-point reporting first | `tape diff` ✅ |
 | **7** | `tape doctor` | Nondeterminism detection |
 | **8** | LangChain callback adapter | Framework coverage |
 | **9** | Overhead benchmarks, docs site, examples dir | v1.0 |

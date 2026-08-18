@@ -585,3 +585,63 @@ def test_an_editor_that_fails_aborts_the_fork(forkable, tmp_path, capsys, monkey
                    "--edit") == 1
     assert "exited 3" in capsys.readouterr().err
     assert paths.list_run_ids(tape_dir) == before
+
+
+# -- diff ----------------------------------------------------------------
+
+
+@pytest.fixture
+def two_runs(tape_dir, server):
+    """Two runs of the same shape, differing in one tool result."""
+    import httpx
+
+    url = server.route("/v1/chat/completions", json={
+        "object": "chat.completion", "model": "gpt-4o-mini",
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2}})
+
+    def build(run_id, note):
+        with tape.session(tape_dir=tape_dir, collect_git=False, run_id=run_id):
+            tape.record_event("tool", {"name": "read_file", "args": {"path": "a.md"}},
+                              {"value": note})
+            httpx.post(url, json={"model": "gpt-4o-mini", "messages": [
+                {"role": "system", "content": "Be terse." + note},
+                {"role": "user", "content": "hi"}]})
+
+    build("01AAA", "")
+    build("01BBB", " Ask first.")
+    return tape_dir
+
+
+def test_diff_reports_what_changed(two_runs, capsys):
+    assert run_cli("--tape-dir", str(two_runs), "diff", "01AAA", "01BBB") == 0
+    out = capsys.readouterr().out
+    assert "diff  A 01AAA   B 01BBB" in out
+    assert "system prompt changed" in out
+    assert "cost" in out and "tokens" in out
+
+
+def test_diff_only_narrows_to_one_kind(two_runs, capsys):
+    run_cli("--tape-dir", str(two_runs), "diff", "01AAA", "01BBB", "--only", "llm")
+    out = capsys.readouterr().out
+    assert "system prompt changed" in out
+    assert "read_file" not in out
+
+
+def test_diff_json_is_machine_readable(two_runs, capsys):
+    assert run_cli("--tape-dir", str(two_runs), "diff", "01AAA", "01BBB",
+                   "--json") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["a"] == "01AAA" and payload["b"] == "01BBB"
+    assert payload["identical"] is False
+    assert len(payload["steps"]) == 2
+
+
+def test_diffing_a_run_against_itself_is_refused(two_runs, capsys):
+    assert run_cli("--tape-dir", str(two_runs), "diff", "01AAA", "01AAA") == 1
+    assert "same run twice" in capsys.readouterr().err
+
+
+def test_diff_accepts_prefixes_and_last(two_runs, capsys):
+    assert run_cli("--tape-dir", str(two_runs), "diff", "01AA", "last") == 0
+    assert "01AAA" in capsys.readouterr().out

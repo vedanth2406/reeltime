@@ -311,6 +311,45 @@ A fork needs live credentials from event N onward. Those are checked **before**
 anything is replayed, so a missing key costs you an error message rather than a
 replayed prefix and then an error message.
 
+## Diff
+
+Two runs, aligned by call site rather than by index, so an event inserted near
+the front does not report everything after it as changed.
+
+```console
+$ tape diff 01M0BFPQ 01M0BFPR
+diff  A 01M0BFPQCH0BJJH78JWEWK98G2   B 01M0BFPQGVF0QZPV4R9HG1GKGK
+
+step 0   identical
+step 1   tool    delete(n=0)  →  ask(n=0)
+                 result: deleted 0  →  asked 0
+step 2   ⋯ divergent from here (A ended; B: 2 more events)
+
+cost   A $0.00      B $0.00
+tokens A 0          B 0
+```
+
+The last line is the one to read first. Alignment and field-level reporting are
+table stakes; naming **the step where two trajectories stop being the same run**
+is the reason to run this at all. Everything above it is detail hung off that
+answer.
+
+For LLM steps the report reaches into the context, so a changed system prompt
+shows as the two lines that changed rather than as "the request differs":
+
+```console
+step 1   llm     system prompt changed
+                 - Answer only from the listing you are given.
+                 + Answer only from the listing you are given. Use the full listing.
+                 tokens in: 88  →  94
+```
+
+`--only llm` (repeatable) narrows the comparison to one kind; `--json` gives the
+same structure as data, divergence point included.
+
+Forks are the natural thing to diff: fork a run with one patch, then compare the
+two and read what that one change did.
+
 ## Why interception is at the transport layer
 
 On **2026-08-18** the OpenAI Python SDK (3.2.0) is built on `httpx2` 2.10, while
@@ -464,7 +503,7 @@ which is the zero-edit claim made concrete.
 | 4 | `--context`, `tape reindex`, examples, **v0.1.0** | ✅ |
 | 5 | `tape fork <run> --at N --patch …` | ✅ |
 | 5.5 | MCP adapter | next |
-| 6 | `tape diff`, divergence-point reporting | |
+| 6 | `tape diff`, divergence-point reporting | ✅ |
 | 7 | `tape doctor` — find a run's nondeterminism sources | |
 | 8 | LangChain callback adapter | |
 | 9 | Overhead benchmarks, docs site | v1.0 |
@@ -480,7 +519,7 @@ changes an agent's behaviour invisibly.
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 461 tests
+pytest                                  # 488 tests
 pytest --cov --cov-report=term-missing  # core/ is at 93%
 python examples/m3_replay_speed.py      # the benchmark above
 ```

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import __version__
-from .core import context, fmt, ids, paths
+from .core import context, fmt, ids, paths, tracediff
 from .core.blobs import BlobStore
 from .core.fork import check_patches, missing_credentials
 from .core.patch import parse_all as parse_patches
@@ -28,7 +28,6 @@ from .core.trace import Event, Trace, read_trace
 from .errors import TapeError
 
 PLANNED = (
-    ("diff", "align and compare two runs", "M6"),
     ("doctor", "find a run's nondeterminism sources", "M7"),
 )
 
@@ -388,6 +387,26 @@ def cmd_fork(args: argparse.Namespace) -> int:
     return completed.returncode
 
 
+# -- tape diff -----------------------------------------------------------
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    tape_dir = _tape_dir(args)
+    a = read_trace(_resolve_run(tape_dir, args.a))
+    b = read_trace(_resolve_run(tape_dir, args.b))
+    if a.run_id == b.run_id:
+        raise TapeError("{} is the same run twice; give two different runs".format(
+            _short(a.run_id)))
+
+    result = tracediff.diff(a, b, only=args.only)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        sys.stdout.write(tracediff.render(result))
+    # A trajectory that diverged is the interesting answer, not an error.
+    return 0
+
+
 # -- tape reindex --------------------------------------------------------
 
 
@@ -588,6 +607,18 @@ def build_parser() -> argparse.ArgumentParser:
     strictness.add_argument("--loose", action="store_true",
                             help="also match on content hash alone (tier 3)")
     replay.set_defaults(func=cmd_replay)
+
+    diff_cmd = sub.add_parser(
+        "diff", help="align two runs and report what changed",
+        description="Aligns two runs by call site and reports where they stop "
+                    "being the same run.")
+    diff_cmd.add_argument("a", help="the earlier run: id, prefix, or 'last'")
+    diff_cmd.add_argument("b", help="the later run: id, prefix, or 'last'")
+    diff_cmd.add_argument("--only", action="append", metavar="KIND",
+                          help="compare only these kinds (llm, tool, http; repeatable)")
+    diff_cmd.add_argument("--json", action="store_true",
+                          help="machine-readable output")
+    diff_cmd.set_defaults(func=cmd_diff)
 
     reindex_cmd = sub.add_parser(
         "reindex", help="re-run the provider decoders over an existing run")
