@@ -321,14 +321,16 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 | **3** | `Player`, three-tier matcher, `TapeMiss` errors, `tape replay --to/--step`, streaming re-emission (`--realtime`) | **Replay works — this is the core** ✅ |
 | **4** | `--context` inspection, `tape reindex`, README, PyPI publish | v0.1.0 released |
 | **5** | Fork + patch grammar, lineage tracking | `tape fork` ✅ |
-| **5.5** | MCP adapter | Unclaimed ground — take it before someone else does |
+| **5.5** | MCP adapter | Unclaimed ground — take it before someone else does ✅ |
 | **6** | Alignment-based diff, divergence-point reporting first | `tape diff` ✅ |
-| **7** | `tape doctor` | Nondeterminism detection |
-| **8** | LangChain callback adapter | Framework coverage |
-| **9** | Overhead benchmarks, docs site, examples dir | v1.0 |
+| **7** | `tape doctor` | Nondeterminism detection ✅ |
+| **9** | LangChain adapter, remaining framework coverage | Framework coverage |
 | **10** | Web UI | `tape ui` |
+| **11** | Overhead benchmarks, docs site, examples dir | v1.0 |
 
 **Resequenced 2026-08-17 after the AgentTape analysis** (`COMPETITIVE.md`). Streaming capture moved from M9 into M2 and streaming replay into M3, because the closest competitor cannot record streams at all and most production agents use them. MCP moved from M9 to M5.5, because AgentTape ships an `mcp` extra with no code behind it and that lead will not last. The web UI moved from M8 to last, because a viewer is the most expensive thing in the plan and the least differentiating now that a competitor ships one — v1.0 no longer waits on it.
+
+**The numbering is not contiguous, and that is deliberate.** Moving the web UI out of M8 emptied that slot; nothing was deferred and nothing is missing. Every other milestone kept the number it already had rather than shuffling up one. **Do not backfill M8** — closing the gap once already made the vacancy look like skipped work, and cost a round of corrections to undo.
 
 M1–M4 is the minimum viable tool and is achievable in about a week of focused work. Everything after is what makes it worth starring.
 
