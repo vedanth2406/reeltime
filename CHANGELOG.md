@@ -29,6 +29,8 @@ All notable changes to this project are documented here. This project follows
 - **`mcp` folds into `http` for alignment**, the way `llm` does, so a session
   recorded before this adapter existed still lines up against one recorded
   since. `--only` is deliberately *not* folded: `--only mcp` means MCP events.
+  (Splitting filtering from folding also fixed `--only llm`, which had been
+  handing back every plain HTTP call; that half shipped separately as 0.3.1.)
 - `--patch mcp.<tool>.result=…` substitutes an MCP result in a fork, exactly as
   `tool.<name>.result=` does for a local tool.
 - `examples/mcp_agent.py` and `examples/mcp_server.py`: a mock MCP server over
@@ -63,6 +65,22 @@ All notable changes to this project are documented here. This project follows
   environment. It is a subprocess of a recorded agent, so `REELTIME_RUN_ID`
   would have had it open the *same* trace file and append its own header and
   events to a run it is not part of.
+
+## [0.3.1] — 2026-08-18
+
+Released from a branch off the 0.3.0 release commit, so it carries this fix
+and nothing else. The same fix is in `[Unreleased]`'s tree as part of M5.5.
+
+### Fixed
+
+- **`tape diff --only <kind>` widened the comparison instead of narrowing it.**
+  Kinds are folded for *alignment* — `llm` is a label a decoder puts on an
+  `http` event, and folding is what lets a run recorded before that decoder
+  existed line up against one recorded after. Filtering was folding too, so
+  `--only llm` asked for LLM calls and got every plain HTTP request in the run
+  as well. Filtering is now literal, with one deliberate alias: `--only http`
+  still includes `llm`, because an llm event *is* an http event wearing a
+  label.
 
 ## [0.3.0] — 2026-08-18
 
