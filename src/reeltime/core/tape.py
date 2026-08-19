@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from ..errors import StopReplay, TapeConfigError, TapeStateError
-from . import fmt, ids, paths, spans
+from . import aws, fmt, ids, paths, spans
 from .blobs import BlobStore
 from .config import Config
 from .decoders import decode as decode_event
@@ -362,6 +362,11 @@ def _install_player(
     run, trace = _load_parent(config, replay)
     redactor = _build_redactor(config)
 
+    # botocore signs before it sends, so an AWS call needs a credential to
+    # exist even though its answer comes from the tape. Scoped to replay, to a
+    # tape that actually touched AWS, and to a machine with nothing configured.
+    injected = aws.inject_for_replay(trace.events)
+
     player = Player(
         trace,
         BlobStore(paths.blobs_dir(config.tape_dir), config.blob_threshold),
@@ -371,6 +376,7 @@ def _install_player(
         realtime=realtime,
         record_library_ambient=config.record_library_ambient,
         stepper=stepper,
+        environment=aws.note_lines(injected),
     )
 
     patcher = AmbientPatcher(player, config.patch).install() if config.patch else None
@@ -473,9 +479,13 @@ def _install_fork(
         record_library_ambient=config.record_library_ambient,
         enrich=decode_event if config.decode else None,
     )
+    # A fork replays a prefix, so the same reasoning applies to that half. Its
+    # live half signs with whatever the user really has, which is why this only
+    # fills in when nothing is configured at all.
     player = Player(
         trace, blobs, redactor, strictness=strictness,
         record_library_ambient=config.record_library_ambient,
+        environment=aws.note_lines(aws.inject_for_replay(trace.events)),
     )
     engine = ForkEngine(player, recorder, fork_at, parsed, override)
 

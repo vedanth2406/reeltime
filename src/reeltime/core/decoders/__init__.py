@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 from ..trace import Event
-from . import anthropic, openai
+from . import anthropic, bedrock, openai
 
 
 class Decoder(NamedTuple):
@@ -44,6 +44,10 @@ class Decoder(NamedTuple):
 REGISTRY: List[Decoder] = [
     Decoder(openai.NAME, openai.matches, openai.decode, openai.context),
     Decoder(anthropic.NAME, anthropic.matches, anthropic.decode, anthropic.context),
+    # Bedrock last of the three: its `matches` is a host check, so it can never
+    # claim a first-party call, but ordering it after the shapes it wraps keeps
+    # the cheap discriminators first.
+    Decoder(bedrock.NAME, bedrock.matches, bedrock.decode),
 ]
 
 

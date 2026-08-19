@@ -16,13 +16,15 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 |---|---|
 | Milestones done | M1–M9, including M5.5. There is no M8 — see the roadmap |
 | Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0`, `0.5.0` — all on PyPI |
-| In the tree | `0.5.0`, clean. Nothing unreleased, nothing unpushed |
+| In the tree | `0.5.0` released, **plus M10 half built** — see "M10 is half built" below |
 | Tests | 738 passing, 6 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
 | Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
-**Next: M10 — `urllib3` interception, closing the Bedrock/boto3 gap.** There is
+**In progress: M10 — `urllib3` interception, closing the Bedrock/boto3 gap.**
+The core works and the tests are not written yet;
+[M10 is half built](#m10-is-half-built--start-here) is the handoff. There is
 no M8; that slot was emptied by the resequencing, not skipped. The web UI moved
 from M10 to M11 to make room; the roadmap at the bottom says why, and why that
 one shuffled where M8 did not.
@@ -207,6 +209,144 @@ that the same revert still breaks it — a gate that cannot fail is decoration.
 macOS is in the CI matrix because `/tmp` is a symlink there and that is how the
 bug reached users; Linux is there because the test makes its own symlink and the
 behaviour must not depend on the platform supplying one.
+
+---
+
+## M10 is half built — start here
+
+**The tree is mid-milestone.** M10 (`urllib3` interception, closing the
+Bedrock/boto3 gap) has a working core and no tests yet. Everything below is
+committed, the suite is green, and the working tree is consistent — it is
+simply not finished. Pick up at "What is left" at the end of this section.
+
+The assessment that authorised it is worth reading first if you are cold: the
+seam is `HTTPConnectionPool.urlopen`, public and documented, and unlike aiohttp
+the replay side was prototyped *before* any code was written and turned out to
+be one public keyword-only constructor. See the M9 framework audit above for
+why Bedrock was the gap worth closing.
+
+### Landed first, deliberately separate
+
+Three commits went in ahead of the Bedrock work, each standing on its own so
+that none of them is hostage to M10 finishing:
+
+| Commit | What it did |
+|---|---|
+| `4bfe2c5` | **The release checklist gap.** `RELEASING.md` step 7 is now a script that exits non-zero and prints `RELEASE VERIFIED`, rather than a diff for a human to eyeball at the end of a long release. It checks the published sdist against the tag, that the tag exists, that it was pushed, and that its commit is on a remote branch. Verified both ways: it passes on the real 0.5.0 and fails when pointed at a missing tag or at `v0.4.0`. |
+| `7075ec8` | **`x-amz-security-token` was reaching disk.** The STS session credential, sent by anything using temporary AWS credentials — an assumed role, an instance profile, SSO, a Lambda. `Authorization` beside it was already dropped by name and the `AKIA`/`ASIA` id inside it was already pattern-matched, so a signed request *looked* covered. Also `x-amzn-authorization`, and a pattern for the same credential in a presigned URL's query string. Landed ahead of M10 because it applies to anyone using boto3 today whether or not this milestone ships. |
+| `9618087` | **The renumber**, plus the boundary-rule design note. |
+
+### The uncommitted core — what each piece is for
+
+| File | Role |
+|---|---|
+| [`core/http/urllib3_shim.py`](src/reeltime/core/http/urllib3_shim.py) | The shim. Patches `HTTPConnectionPool.urlopen`; records by wrapping the response in a file-like, replays by building a fresh `HTTPResponse` over the recorded chunks. Installed last in `HttpShim` so the install order matches the way a request travels. |
+| [`core/aws.py`](src/reeltime/core/aws.py) | Dummy-credential injection for replay. Needed because **botocore signs before it sends**, so a missing credential raises `NoCredentialsError` and the shim underneath is never reached at all — measured, with the environment scrubbed `urlopen` sees zero calls. Scoped three ways: replay only, tapes that actually touched `.amazonaws.com` only, and machines with nothing configured only. Reported through `ReplaySummary.environment` so a replay that works on a laptop with no AWS config is not a mystery. |
+| [`core/decoders/bedrock.py`](src/reeltime/core/decoders/bedrock.py) | The provider decoder. Handles Anthropic-on-Bedrock, Titan, Nova, Meta and the Converse API, plus a binary event-stream frame parser (`iter_frames`) because Bedrock streams `application/vnd.amazon.eventstream`, not SSE. |
+| [`examples/bedrock_agent.py`](examples/bedrock_agent.py) | Mock Bedrock endpoint, both operations, no AWS account. Currently records 2 `llm` events and replays identically, with `137→6` tokens and `$0.0020` cost populated. |
+
+Also touched: `core/http/__init__.py` (registers the shim),
+`core/http/common.py` (`application/vnd.amazon.eventstream` added to
+`STREAM_CONTENT_TYPES`), `core/player.py` and `core/tape.py` (the
+`environment` note), `core/decoders/__init__.py` and `pricing.py`.
+
+### Three bugs, all found by measuring rather than reasoning
+
+Recorded because two of them are invisible to inspection and the third would be
+reintroduced by anyone tidying the stream path.
+
+**1. The shim recorded nothing at all.** Completion only fired on an empty read
+or an explicit `close()`. botocore reads a non-streaming body with a single
+`resp.read()` and never reads again, so the event was never written. The first
+end-to-end run reported `recorded 0 events` while the agent worked perfectly.
+Fixed by completing when the body is exhausted, not only when someone asks for
+more.
+
+**2. `read(amt)` collapses the frame boundaries. This is the one to be careful
+with.** The obvious implementation of a recording wrapper is to pass `read(n)`
+through to the inner response and keep what comes back. It is wrong, and it is
+wrong *silently*: `read(n)` on a buffered response **blocks until it has n
+bytes or the connection ends**, so a six-frame Bedrock stream arrives as a
+single 1376-byte read and every chunk boundary is gone before anything can
+record it. The recording still replays correctly — the bytes are all there —
+so nothing fails, and the chunk-boundary claim quietly becomes untrue.
+
+`_RecordingBody` therefore drives the inner response with **`stream()`**, which
+yields what arrived when it arrived (one HTTP chunk at a time for a chunked
+response), and hands the caller one inner chunk per `read()`. Measured: the
+same stream records as **six chunks** this way and **one** the other way.
+`read(None)` still returns the whole body, because that is what asking for
+everything means — the chunks are recorded individually and joined on the way
+out.
+
+**If you refactor the stream path, re-check the recorded chunk count on a
+multi-frame stream.** A test asserting only that the bytes round-trip will pass
+against the broken version.
+
+Two smaller consequences of the same design, both load-bearing:
+`_RecordingBody.closed` reports *its own* exhaustion rather than delegating to
+the inner response, because urllib3 marks a response closed as soon as its
+connection is drained while chunks are still queued in the iterator; and the
+mock in the example sleeps `FRAME_GAP_S` between frames, because flushing alone
+does not stop the kernel coalescing the writes.
+
+**3. The decoder only matched on hostname.** Any `endpoint_url` override — a
+VPC endpoint, a gateway, LocalStack, or the example's own mock — put a
+different name in front of the same API and the call silently lost its token
+counts. `matches` now also recognises the path shape, `/model/<id>/<operation>`
+with one of four known operations, which is specific enough to carry the
+recognition on its own.
+
+### Bedrock pricing: partly verified, and deliberately incomplete
+
+`https://aws.amazon.com/bedrock/pricing/` renders its current-model tables
+client-side, so only the rows still present in the served HTML could be checked.
+**Only those rows were added** — `anthropic.claude-3-5-sonnet` ($6.00/$30.00),
+`anthropic.claude-instant`, `anthropic.claude-v2:1`, and
+`amazon.titan-text-lite`. Nova and the Claude-5 family are absent on purpose:
+their **token counts populate and `cost_usd` stays null**, which is what this
+project does with a price it does not know.
+
+**Do not alias Bedrock ids to the first-party rows.** It is the obvious
+shortcut and it produces confidently wrong numbers: Claude 3.5 Sonnet is
+**$3.00/$15.00 direct from Anthropic and $6.00/$30.00 on Bedrock**, which is
+the figure that was actually read off the page. Bedrock is its own price list
+for the same models. `BEDROCK_REGION_PREFIXES` strips the geography off a
+cross-region inference profile (`us.anthropic.claude-…`) before lookup, so
+those resolve without a row each.
+
+Getting the remaining prices needs a browser, or the AWS Price List API, and is
+a pre-flight item either way — `RELEASING.md` step 0 already requires
+re-verifying `pricing.py` before a release.
+
+### What is left
+
+Nothing here is blocked; it is ordinary remaining work.
+
+- [ ] **`tests/test_urllib3.py`** — record/replay through the shim against a
+      real socket, the way `tests/test_http.py` does it.
+- [ ] **`tests/test_bedrock.py`** — the decoder over each family's response
+      shape, and the frame parser on a truncated tail.
+- [ ] **The `requests`-on-`urllib3` regression test.** Measured as already
+      handled by the M1 boundary rule, and pinned so it stays that way: inside
+      a `RequestsShim`-recorded call, `urlopen` is reached with `in_boundary()`
+      already true, so one event and not two.
+- [ ] **Replay with `AWS_*` scrubbed and no config files.** The claim
+      `core/aws.py` exists for, and it has to be tested with the environment
+      actually emptied rather than with dummy values pre-set.
+- [ ] **Byte-exact framing assertion** — prelude and both CRC32s per message,
+      and the recorded chunk *count* as well as the joined bytes (see bug 2).
+- [ ] **A boto3 call inside `@tape.tool` is one event.**
+- [ ] **Wire `examples/bedrock_agent.py` into the suite**, and check the
+      example count assertion in `tests/test_examples.py` still holds.
+- [ ] **Coverage ≥85% on `core/`, and `pytest -m wheel` green** — three new
+      modules are in the wheel now.
+- [ ] **README, STATUS, CHANGELOG.** The README's "What this can't replay"
+      currently names `urllib3`/Bedrock as a gap and will need moving, the same
+      way aiohttp moved from "unsupported" to "guarded" in 0.5.0.
+- [ ] Decide whether `chain`-style patch grammar applies here. It does not
+      today: no new `--patch` fields were added, so `test_patch_effects.py`
+      needs no case. **If that changes, all four steps apply.**
 
 ---
 
@@ -599,7 +739,7 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | 5.5 | **MCP adapter** | ✅ |
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
 | 9 | LangChain adapter, remaining framework coverage | ✅ |
-| 10 | `urllib3` interception — Bedrock/boto3, streaming included | **next** |
+| 10 | `urllib3` interception — Bedrock/boto3, streaming included | **in progress** |
 | 11 | Web UI | |
 | 12 | Overhead benchmarks, docs site → v1.0 | |
 

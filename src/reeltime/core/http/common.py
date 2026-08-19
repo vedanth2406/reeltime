@@ -29,11 +29,18 @@ import base64
 import json
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-#: Content types whose chunk boundaries are semantically meaningful. Everything
-#: an LLM provider streams is served as SSE, and for those the ordered chunk
-#: list is recorded instead of the assembled body. Chunking of an ordinary
-#: response is a transport artefact and is not worth preserving.
-STREAM_CONTENT_TYPES = ("text/event-stream",)
+#: Content types whose chunk boundaries are semantically meaningful. Most of
+#: what an LLM provider streams is served as SSE, and for those the ordered
+#: chunk list is recorded instead of the assembled body. Chunking of an
+#: ordinary response is a transport artefact and is not worth preserving.
+#:
+#: Bedrock is the exception to the SSE rule: it streams
+#: ``application/vnd.amazon.eventstream``, a binary framing with a length
+#: prelude and two CRC32s per message. Nothing about it is line-oriented, so a
+#: recorded blob that is one byte out does not degrade -- botocore's parser
+#: rejects the whole stream on a CRC mismatch. That makes byte-exact capture
+#: the only thing worth having here, which is precisely what the chunk list is.
+STREAM_CONTENT_TYPES = ("text/event-stream", "application/vnd.amazon.eventstream")
 
 
 def is_stream_content_type(content_type: Optional[str]) -> bool:

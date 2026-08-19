@@ -61,6 +61,11 @@ class ReplaySummary:
     unconsumed: List[Event] = field(default_factory=list)
     stopped_at: Optional[int] = None
     strictness: str = DEFAULT
+    #: Anything reeltime did to the environment to make this replay possible.
+    #: A replay that works on a machine with no AWS config at all is otherwise
+    #: a small mystery, and an unexplained success is the same kind of problem
+    #: as an unexplained failure.
+    environment: List[str] = field(default_factory=list)
 
     @property
     def drifted(self) -> List[DriftRecord]:
@@ -91,7 +96,7 @@ class ReplaySummary:
         Printed at the end of every replay. A drifted match that nobody
         mentions is the silent divergence this tool exists to prevent.
         """
-        out: List[str] = []
+        out: List[str] = list(self.environment)
         drifted, fuzzy = self.drifted, self.fuzzy
         if drifted:
             out.append("{} event{} matched with drifted content".format(
@@ -131,6 +136,7 @@ class Player:
         realtime: bool = False,
         record_library_ambient: bool = False,
         stepper: Optional[Callable[[Event, "Player"], None]] = None,
+        environment: Optional[List[str]] = None,
     ) -> None:
         self.trace = trace
         self.blobs = blobs
@@ -140,6 +146,7 @@ class Player:
         self.realtime = realtime
         self.record_library_ambient = record_library_ambient
         self.stepper = stepper
+        self.environment: List[str] = list(environment or [])
         self.index = MatchIndex(trace.events, blobs)
         self.drifts: List[DriftRecord] = []
         self.consumed = 0
@@ -259,6 +266,7 @@ class Player:
             unconsumed=self.index.unconsumed(),
             stopped_at=self.stopped_at,
             strictness=self.strictness,
+            environment=list(self.environment),
         )
         for note in summary.notes():
             logger.warning("reeltime: %s", note)

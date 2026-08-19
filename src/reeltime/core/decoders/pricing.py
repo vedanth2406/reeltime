@@ -3,10 +3,14 @@
 Kept out of decoder logic on purpose: prices change often, and a table is
 something a user can correct with a pull request without reading any code.
 
-**Sources**, both checked **2026-08-18**:
+**Sources**:
 
-* https://developers.openai.com/api/docs/pricing
-* https://platform.claude.com/docs/en/about-claude/pricing
+* https://developers.openai.com/api/docs/pricing — checked **2026-08-18**
+* https://platform.claude.com/docs/en/about-claude/pricing — checked **2026-08-18**
+* https://aws.amazon.com/bedrock/pricing/ — checked **2026-08-19**, and only
+  partly: that page renders its current-model tables client-side, so only the
+  rows still present in the served HTML could be verified. The Bedrock section
+  below carries what was actually read and nothing else.
 
 Entries are USD per **one million** tokens, ``(input, output)``, at base rates.
 Batch (50% off), prompt-caching multipliers, fast mode, and the US data
@@ -70,7 +74,31 @@ PRICES: Dict[str, Tuple[float, float]] = {
     "claude-haiku-4-5": (1.00, 5.00),
     "claude-3-5-haiku": (0.80, 4.00),
     "claude-3-5-sonnet": (3.00, 15.00),
+    # -- Amazon Bedrock -------------------------------------------------
+    #
+    # Bedrock model ids are their own namespace (`anthropic.claude-…`,
+    # `amazon.nova-…`), so they cannot borrow the rows above -- and must not.
+    # **Bedrock does not charge the first-party price for the same model**:
+    # Claude 3.5 Sonnet is $3.00/$15.00 direct from Anthropic and $6.00/$30.00
+    # on Bedrock. Aliasing one to the other would have produced a confidently
+    # wrong number, which is the failure this whole file is arranged to avoid.
+    #
+    # Only rows verified against the pricing page are here. The current-model
+    # tables on that page are rendered client-side, so anything not listed
+    # below could not be checked and is deliberately absent: an unpriced model
+    # reports `cost_usd: null`, which is honest, where a guess would not be.
+    # **Titan and Nova token counts populate; their costs do not yet.**
+    "anthropic.claude-3-5-sonnet": (6.00, 30.00),
+    "anthropic.claude-instant": (0.80, 4.00),
+    "anthropic.claude-v2:1": (8.00, 40.00),
+    "amazon.titan-text-lite": (0.30, 0.40),
 }
+
+#: Cross-region inference profiles prefix the model id with a geography, so
+#: ``us.anthropic.claude-…`` and ``anthropic.claude-…`` are the same model at
+#: the same price. Stripped before lookup rather than duplicated into the table
+#: three times per row.
+BEDROCK_REGION_PREFIXES = ("us.", "eu.", "apac.", "us-gov.")
 
 
 def lookup(model: Optional[str]) -> Optional[Tuple[float, float]]:
@@ -85,6 +113,10 @@ def lookup(model: Optional[str]) -> Optional[Tuple[float, float]]:
     # Strip a deployment prefix, e.g. Azure's "my-deployment/gpt-4o".
     if "/" in name:
         name = name.rsplit("/", 1)[-1]
+    for prefix in BEDROCK_REGION_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
     best: Optional[str] = None
     for prefix in PRICES:
         if name.startswith(prefix) and (best is None or len(prefix) > len(best)):

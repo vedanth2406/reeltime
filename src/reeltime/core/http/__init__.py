@@ -1,10 +1,11 @@
 """HTTP interception.
 
-Three shims, installed together and each independently optional: ``httpx``,
-``httpx2``, and ``requests``. The first two are the primary path -- every
-modern LLM SDK is built on one of them, and as of 2026 the OpenAI SDK has moved
-to httpx2 while the Anthropic SDK is still on httpx. ``requests`` is the
-fallback for older tool code.
+Four shims, installed together and each independently optional: ``httpx``,
+``httpx2``, ``requests`` and ``urllib3``. The first two are the primary path --
+every modern LLM SDK is built on one of them, and as of 2026 the OpenAI SDK has
+moved to httpx2 while the Anthropic SDK is still on httpx. ``requests`` is the
+fallback for older tool code, and ``urllib3`` sits under both of those and
+under ``botocore``, which is what makes Bedrock recordable at all.
 
 Unlike the numpy patch, which only applies if numpy was already imported, these
 import their target module eagerly when it is installed. ``tape run`` installs
@@ -20,6 +21,7 @@ from ..recorder import Recorder
 from .aiohttp_guard import AiohttpGuard
 from .httpx_shim import HttpxShim
 from .requests_shim import RequestsShim
+from .urllib3_shim import Urllib3Shim
 
 
 class HttpShim:
@@ -31,6 +33,12 @@ class HttpShim:
             ("httpx", HttpxShim(recorder, "httpx")),
             ("httpx2", HttpxShim(recorder, "httpx2")),
             ("requests", RequestsShim(recorder)),
+            # Last, and deliberately so. `requests` is built on urllib3, so a
+            # requests call reaches this seam too -- underneath the shim above
+            # it, inside its boundary, where nothing records. Order does not
+            # actually decide that (the M1 boundary rule does), but installing
+            # the lower layer last matches the way a request travels.
+            ("urllib3", Urllib3Shim(recorder)),
         ]
         #: aiohttp is *not* one of the shims and does not go in ``installed``:
         #: it is not intercepted, and saying otherwise in the footer would be a
@@ -58,4 +66,4 @@ class HttpShim:
         self.installed.clear()
 
 
-__all__ = ["HttpShim", "HttpxShim", "RequestsShim", "AiohttpGuard"]
+__all__ = ["HttpShim", "HttpxShim", "RequestsShim", "Urllib3Shim", "AiohttpGuard"]
