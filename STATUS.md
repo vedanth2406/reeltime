@@ -14,7 +14,7 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 
 | | |
 |---|---|
-| Milestones done | M1–M7 **including M5.5**; M8 skipped for now |
+| Milestones done | M1–M7, including M5.5. There is no M8 — see the roadmap |
 | Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0` — all on PyPI |
 | In the tree | `0.4.0`, clean. Nothing unreleased, nothing unpushed |
 | Tests | 622 passing, 6 deselected (the wheel gate), 95% on `core/` |
@@ -22,9 +22,9 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 | Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0` — the last three verified against their artifacts |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
-**Next: M9 — overhead benchmarks and a docs site, the last thing before v1.0.**
-M8 (the LangChain callback adapter) is deliberately skipped rather than done;
-see the roadmap at the bottom.
+**Next: M9 — the LangChain adapter and the rest of the framework coverage.**
+There is no M8; the slot was emptied by the resequencing, not skipped. The
+roadmap at the bottom says why.
 
 There is no outstanding release work. `0.4.0` is published, tagged at the
 commit it was built from, and verified.
@@ -388,22 +388,25 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | 1–6 | see above | ✅ |
 | 5.5 | **MCP adapter** | ✅ |
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
-| 8 | LangChain callback adapter | **skipped for now** |
-| 9 | Overhead benchmarks, docs site → v1.0 | **next** |
+| 9 | LangChain adapter, remaining framework coverage | **next** |
 | 10 | Web UI | |
+| 11 | Overhead benchmarks, docs site → v1.0 | |
 
-**M8 is skipped, not done.** The LangChain callback adapter was resequenced
-behind M9 deliberately: M9 is the last thing between here and v1.0, and the
-overhead numbers are what the README currently asserts without measuring at this
-scale. If M8 comes back, it comes back after v1.0 — nothing in M9 depends on it,
-and nothing shipped assumes it exists.
+**There is no M8.** The original spec §11 had M8 = web UI. The resequencing
+after the competitive analysis moved the web UI to M10, which emptied the slot;
+nothing was deferred and nothing is missing. The number is simply vacant, and
+the row is left out rather than backfilled — closing the gap by renumbering is
+how it got mistaken for skipped work once already.
 
-M9, concretely, from spec §11: measure the recording overhead per boundary kind
-(the README claims ~2 ms per HTTP event and 20–30 µs per ambient read — those
-numbers predate M5.5 and M7 and should be re-measured, not re-quoted), publish a
-docs site, and cut v1.0.
+M9, concretely: a LangChain callback adapter, and whatever else the framework
+layer needs to be honestly covered. It is the last adapter-shaped milestone.
+
+M11 is what stands between here and v1.0: measure the recording overhead per
+boundary kind and publish a docs site. The README currently claims ~2 ms per
+HTTP event and 20–30 µs per ambient read — **those numbers predate M5.5 and M7
+and should be re-measured, not re-quoted.**
 
 MCP was deliberately early, and it shipped: no record/replay tool captures MCP
 sessions, and AgentTape still publishes an `mcp` optional dependency with no
-code behind it. The web UI stays last: it is the most expensive milestone and
+code behind it. The web UI stays late: it is the most expensive milestone and
 the least differentiating, since a competitor already ships a viewer.

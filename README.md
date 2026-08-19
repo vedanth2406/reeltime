@@ -691,9 +691,9 @@ mock MCP server next to it.
 | 6 | `tape diff`, divergence-point reporting, **v0.3.0** | ✅ |
 | 5.5 | MCP adapter — `mcp` events, both transports, tool-set diff | ✅ |
 | 7 | `tape doctor` — find a run's nondeterminism sources | ✅ |
-| 8 | LangChain callback adapter | deferred past v1.0 |
-| 9 | Overhead benchmarks, docs site | **next**, → v1.0 |
+| 9 | LangChain adapter, remaining framework coverage | **next** |
 | 10 | Web UI | |
+| 11 | Overhead benchmarks, docs site | → v1.0 |
 
 MCP shipped early on purpose: no other record/replay tool captures MCP sessions,
 and a server that exposes a different tool set between runs is exactly the kind
