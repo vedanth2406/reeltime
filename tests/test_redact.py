@@ -48,6 +48,94 @@ def test_sensitive_headers_are_dropped_entirely():
     assert out["Content-Type"] == "application/json"
 
 
+# -- SigV4, the shape every boto3 request has -----------------------------
+
+#: A realistic signed AWS request's headers. Every field is the real format:
+#: the `Authorization` line is what SigV4 actually emits, and
+#: `X-Amz-Security-Token` is the STS session credential that anything using
+#: temporary credentials carries -- an assumed role, an instance profile, SSO,
+#: a Lambda. It is an opaque blob with no recognisable prefix, which is exactly
+#: why the payload scan cannot catch it.
+FAKE_SESSION_TOKEN = (
+    "FwoGZXIvYXdzEBYaDExhbXBsZVRva2VuIiuvNotARealTokenButShapedLikeOne"
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP+/=="
+)
+SIGV4_HEADERS = {
+    "Authorization": (
+        "AWS4-HMAC-SHA256 "
+        "Credential=ASIAIOSFODNN7EXAMPLE/20260819/us-east-1/bedrock/aws4_request, "
+        "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, "
+        "Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024"
+    ),
+    "X-Amz-Security-Token": FAKE_SESSION_TOKEN,
+    "X-Amz-Date": "20260819T163000Z",
+    "X-Amz-Content-Sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "Content-Type": "application/json",
+}
+
+
+def test_a_signed_aws_request_leaves_no_credential_behind():
+    """Three separate credentials ride on one signed request."""
+    redactor = Redactor()
+    out = redactor.scrub_headers(SIGV4_HEADERS)
+
+    assert out["Authorization"] == "<redacted>"
+    assert out["X-Amz-Security-Token"] == "<redacted>"
+    assert FAKE_SESSION_TOKEN not in json.dumps(out)
+    assert "ASIAIOSFODNN7EXAMPLE" not in json.dumps(out)
+    assert "fe5f80f77d5fa3beca038a248ff027d0445342fe" not in json.dumps(out)
+
+    # The two that are not credentials survive: a signed request that records
+    # nothing about when or what it signed is less useful for no benefit.
+    assert out["X-Amz-Date"] == "20260819T163000Z"
+    assert out["Content-Type"] == "application/json"
+
+
+def test_the_session_token_is_dropped_by_name_not_by_luck():
+    """No pattern matches it, so the header rule is the only thing that can.
+
+    If `x-amz-security-token` ever falls out of SENSITIVE_HEADERS, the payload
+    scan will not quietly cover for it -- this asserts the gap it would leave.
+    """
+    redactor = Redactor()
+    assert redactor.scrub_text(FAKE_SESSION_TOKEN) == FAKE_SESSION_TOKEN
+
+
+def test_the_header_rule_is_case_insensitive_the_way_botocore_sends_it():
+    """botocore sends `X-Amz-Security-Token`; urllib3 may normalise the case."""
+    redactor = Redactor()
+    for spelling in ("X-Amz-Security-Token", "x-amz-security-token",
+                     "X-AMZ-SECURITY-TOKEN"):
+        out = redactor.scrub_headers({spelling: FAKE_SESSION_TOKEN})
+        assert out[spelling] == "<redacted>", spelling
+
+
+def test_signed_headers_recorded_as_pairs_are_dropped_too():
+    """The HTTP shims record headers as ordered pairs, not as a mapping."""
+    redactor = Redactor()
+    out = redactor.scrub_header_pairs(list(SIGV4_HEADERS.items()))
+    flat = json.dumps(out)
+    assert FAKE_SESSION_TOKEN not in flat
+    assert "AWS4-HMAC-SHA256" not in flat
+    assert redactor.hits["header"] == 2
+
+
+def test_a_presigned_url_carries_the_same_credential_in_its_query():
+    """Same secret, different door: a URL is recorded as text, so the header
+    rule never sees it."""
+    redactor = Redactor()
+    url = ("https://s3.us-east-1.amazonaws.com/bucket/key?"
+           "X-Amz-Algorithm=AWS4-HMAC-SHA256&"
+           "X-Amz-Security-Token=" + FAKE_SESSION_TOKEN.replace("+", "%2B") +
+           "&X-Amz-Expires=900")
+    out = redactor.scrub_text(url)
+    assert "NotARealTokenButShapedLikeOne" not in out
+    assert "<redacted:aws-session>" in out
+    # The rest of the URL still reads as a URL.
+    assert "X-Amz-Expires=900" in out
+    assert out.startswith("https://s3.us-east-1.amazonaws.com/bucket/key?")
+
+
 def test_secret_shaped_field_names_are_redacted_by_name():
     redactor = Redactor()
     out = redactor.scrub({"api_key": "not-key-shaped-but-still-a-key", "model": "gpt-4o"})

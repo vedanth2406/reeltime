@@ -31,6 +31,15 @@ SENSITIVE_HEADERS = frozenset(
         "api-key",
         "x-auth-token",
         "x-goog-api-key",
+        # SigV4's session credential, sent by anything using temporary AWS
+        # credentials -- an assumed role, an instance profile, SSO, a Lambda.
+        # It is an opaque blob with no recognisable prefix, so the payload scan
+        # below cannot catch it and dropping it by name is the only thing that
+        # does. The `Authorization` header beside it is already covered, and the
+        # `AKIA`/`ASIA` key id inside it is matched by pattern as well -- this
+        # is the one piece of a signed AWS request that was reaching disk.
+        "x-amz-security-token",
+        "x-amzn-authorization",
         "cookie",
         "set-cookie",
     }
@@ -45,6 +54,10 @@ DEFAULT_PATTERNS: Sequence[Tuple[str, str]] = (
     ("sk", r"sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}"),
     ("gh", r"gh[pousr]_[A-Za-z0-9]{30,}"),
     ("aws", r"(?<![A-Z0-9])(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}(?![A-Z0-9])"),
+    # The same session credential again, carried in a query string instead of a
+    # header. A presigned URL puts it there, and a URL is recorded as text, so
+    # the header rule above never sees it.
+    ("aws-session", r"(?i)X-Amz-Security-Token=[A-Za-z0-9%\-._~+/]{20,}"),
     ("gcp", r"AIza[0-9A-Za-z\-_]{35}"),
     ("slack", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     ("hf", r"hf_[A-Za-z0-9]{30,}"),
