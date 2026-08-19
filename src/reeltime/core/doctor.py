@@ -61,6 +61,13 @@ def outcome(event: Event) -> Any:
     reporting it as one sends the user to the wrong line.
     """
     res = event.res or {}
+    if event.kind == "chain":
+        # A LangChain node is structure, not a boundary: its outputs are what
+        # the model calls underneath it produced, so reporting them as a source
+        # points at the node that carried the difference rather than the one
+        # that caused it. A node that *moved* is a real signal, and alignment
+        # already reports that as a path split.
+        return None
     if event.kind in ("rand", "time", "uuid", "tool", "mcp"):
         return res.get("value")
     if event.kind in ("llm", "http"):

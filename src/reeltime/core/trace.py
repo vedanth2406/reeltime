@@ -38,7 +38,7 @@ from .redact import Redactor, looks_secret
 SCHEMA_VERSION = 1
 
 #: Every boundary reeltime knows how to cross.
-KINDS = ("llm", "http", "tool", "mcp", "rand", "time", "uuid")
+KINDS = ("llm", "http", "tool", "mcp", "chain", "rand", "time", "uuid")
 
 #: Packages whose version can change replay behaviour. Recorded when present.
 TRACKED_PACKAGES = (

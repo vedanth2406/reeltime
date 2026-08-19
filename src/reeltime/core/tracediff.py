@@ -23,8 +23,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import context as context_mod
 from .fmt import usd
+from . import langchain as langchain_mod
 from . import mcp as mcp_mod
-from .matching import filter_kinds, kind_key
+from .matching import align_key, filter_kinds
 from .trace import Event, Trace
 
 SAME = "same"
@@ -43,9 +44,14 @@ def signature(event: Event) -> Tuple[str, str, str]:
     the fact, and a run recorded before that decoder existed should still line
     up against one recorded after it. ``mcp`` folds in for the same reason --
     before the adapter, an MCP call over HTTP was recorded as opaque http at
-    this very call site.
+    this very call site. So does ``chain``, one milestone later again.
+
+    ``align_key``, not ``kind_key``: the matcher folds a narrower set, because
+    a wrong pairing here costs a confusing line in a report and a wrong pairing
+    there costs a replay served the wrong payload. See
+    :mod:`reeltime.core.matching`.
     """
-    return (kind_key(event.kind), event.site, event.name or "")
+    return (align_key(event.kind), event.site, event.name or "")
 
 
 @dataclass
@@ -238,11 +244,16 @@ def describe(a: Event, b: Event) -> List[Change]:
 
     if a.kind == "mcp" or b.kind == "mcp":
         changes.extend(_mcp_changes(a, b))
-    elif kind_key(a.kind) == "http":
+    elif a.kind == "chain" or b.kind == "chain":
+        changes.extend(_chain_changes(a, b))
+    elif align_key(a.kind) == "http":
         changes.extend(_llm_changes(a, b))
 
+    # A chain node did not *return* anything; it produced outputs. Same field,
+    # and the word matters when the line is the whole report.
+    outputs = "outputs" if "chain" in (a.kind, b.kind) else "result"
     for label, before, after in (
-        ("result", (a.res or {}).get("value"), (b.res or {}).get("value")),
+        (outputs, (a.res or {}).get("value"), (b.res or {}).get("value")),
         ("status", (a.res or {}).get("status"), (b.res or {}).get("status")),
     ):
         if before != after and (before is not None or after is not None):
@@ -306,6 +317,43 @@ def _mcp_changes(a: Event, b: Event) -> List[Change]:
     error_a, error_b = (a.res or {}).get("is_error"), (b.res or {}).get("is_error")
     if error_a != error_b:
         changes.append(Change("tool error", error_a, error_b))
+    return changes
+
+
+def _chain_changes(a: Event, b: Event) -> List[Change]:
+    """Differences between two LangChain nodes.
+
+    The one that matters is the *shape*. Two runs of the same agent that took
+    different routes through the graph have not merely produced different
+    payloads at this step -- they ran a different program -- so a node that
+    moved, changed depth, or fanned out to a different number of children gets
+    its own line naming what moved. Left as a payload diff it would read as
+    "the inputs differ", which is true of every node downstream of any change
+    and tells nobody anything.
+    """
+    changes: List[Change] = []
+    before, after = langchain_mod.structure(a), langchain_mod.structure(b)
+    if before is None or after is None:
+        return changes
+
+    path_a, depth_a, kids_a = before
+    path_b, depth_b, kids_b = after
+    if path_a != path_b or depth_a != depth_b:
+        changes.append(Change(
+            "chain structure changed",
+            before="depth {}".format(depth_a), after="depth {}".format(depth_b),
+            lines=["- " + path_a, "+ " + path_b],
+        ))
+    elif kids_a != kids_b:
+        changes.append(Change(
+            "chain fan-out changed",
+            before="{} child node{}".format(kids_a, "" if kids_a == 1 else "s"),
+            after="{} child node{}".format(kids_b, "" if kids_b == 1 else "s"),
+        ))
+
+    type_a, type_b = a.req.get("type"), b.req.get("type")
+    if type_a != type_b:
+        changes.append(Change("node type", type_a, type_b))
     return changes
 
 

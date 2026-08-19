@@ -349,6 +349,33 @@ def test_every_declared_field_is_documented():
         assert field in grammar, "{}.{} is not in the README table".format(kind, field)
 
 
+def test_the_chain_kind_deliberately_has_no_patch_fields():
+    """M9 added an event kind and no grammar for it, on purpose.
+
+    A LangChain node is recorded by a *callback handler*, which is an observer:
+    it is told a node started and cannot change what the node does or what it
+    returns. A `chain.*` field would therefore parse, report itself as applied
+    in the fork footer, and change nothing -- which is precisely what
+    `tool.args` did for two releases and precisely what this file exists to
+    prevent. Patch the `llm` boundary inside the node instead.
+
+    If that ever changes, all four steps still apply: declare it, implement it,
+    document it in both tables, and add a case above.
+    """
+    from reeltime.core import patch as patch_mod
+
+    assert "chain" not in patch_mod.KINDS
+    assert not [pair for pair in declared_fields() if pair[0] == "chain"]
+
+    with pytest.raises(TapeConfigError) as caught:
+        parse_all(["chain.model.result=x"])
+    message = str(caught.value)
+    assert "unknown kind" in message
+    # And the error names what it will accept, so nobody has to guess.
+    for kind in patch_mod.KINDS:
+        assert kind in message
+
+
 # -- what the grammar now refuses -----------------------------------------
 
 

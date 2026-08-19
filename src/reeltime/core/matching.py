@@ -71,9 +71,29 @@ EQUIVALENT_KINDS = {"llm": "http", "mcp": "http"}
 #: anywhere in it.
 FILTER_ALIASES = {"http": ("http", "llm")}
 
+#: What ``tape diff`` folds together, which is a *third* question again. A
+#: ``chain`` event sits at the same call site as the model calls underneath it,
+#: because a suspended chain has no frame of its own, so folding it in is what
+#: lets a run recorded before the LangChain adapter existed line up against one
+#: recorded since.
+#:
+#: **It is deliberately not in EQUIVALENT_KINDS.** Alignment is advisory: a
+#: wrong pairing produces a confusing report. Matching is not: a request folded
+#: into the wrong bucket can be served a chain event's payload where an HTTP
+#: response was expected, which is a silent wrong answer rather than a clean
+#: TapeMiss. A chain node is not a boundary, so nothing recorded as ``http``
+#: was ever the same crossing as one -- unlike ``llm`` and ``mcp``, which are.
+ALIGN_KINDS = dict(EQUIVALENT_KINDS, chain="http")
+
 
 def kind_key(kind: str) -> str:
+    """The bucket a *live call* looks for its recording in."""
     return EQUIVALENT_KINDS.get(kind, kind)
+
+
+def align_key(kind: str) -> str:
+    """The bucket ``tape diff`` pairs two recorded events in."""
+    return ALIGN_KINDS.get(kind, kind)
 
 
 def filter_kinds(only: Sequence[str]) -> set:
@@ -95,6 +115,16 @@ CONTENT_FIELDS = {
     # ``op`` separates the handshake and the discovery call from a tool that
     # happens to be named ``initialize``, without giving them a kind each.
     "mcp": ("server", "op", "name", "args"),
+    # Structure, and only structure. A chain node's inputs are a *consequence*
+    # of the model calls above it, which the tape already holds still; hashing
+    # them would report drift on every node downstream of a prompt tweak and
+    # bury the one place the run actually changed. Identity is where the node
+    # sits -- its path through the run tree, and which branch of a sequence or
+    # a map it is.
+    # ``depth`` as well as ``path``: normally one implies the other, but a very
+    # deep path is capped when it is recorded, so two nodes far down a
+    # recursive graph can share a capped path without sharing a position.
+    "chain": ("framework", "name", "type", "path", "depth", "step"),
     "rand": ("name", "args", "kwargs", "n"),
     "time": ("name", "tz"),
     "uuid": ("name",),

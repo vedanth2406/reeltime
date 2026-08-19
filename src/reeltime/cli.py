@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from . import __version__
 from .core import context, doctor, fmt, ids, paths, tracediff
+from .core import langchain as langchain_mod
 from .core import mcp as mcp_mod
 from .core.blobs import BlobStore
 from .core.fork import check_patches, missing_credentials
@@ -31,10 +32,8 @@ from .errors import TapeError
 #: Not yet built. Kept in step with the roadmap table in the README -- the two
 #: are the only places that promise anything, so they must not drift apart.
 #: Entries that are not subcommands say so in their name ("mcp adapter").
-#: Not yet built. Kept in step with the roadmap table in the README -- the two
-#: are the only places that promise anything, so they must not drift apart.
 PLANNED = (
-    ("langchain adapter", "record a LangChain agent's callbacks", "M9"),
+    ("ui", "browse a run in a local viewer", "M10"),
 )
 
 
@@ -112,6 +111,8 @@ def _summarise(event: Event) -> str:
         )
     if event.kind == "mcp":
         return _summarise_mcp(event)
+    if event.kind == "chain":
+        return _summarise_chain(event)
     return "{} = {}".format(req.get("name", event.kind), _truncate(json.dumps(res)[:80], 60))
 
 
@@ -137,6 +138,68 @@ def _summarise_mcp(event: Event) -> str:
         server, req.get("name", "?"),
         _truncate(json.dumps(req.get("args", {}), default=str)[1:-1], 30),
         _truncate(json.dumps(res.get("value"), default=str), 34), marker)
+
+
+def _summarise_chain(event: Event) -> str:
+    """One line for a LangChain node, indented to its depth.
+
+    The indentation is the point. A run listing is where you first look at an
+    agent, and a flat column of node names says nothing about the shape that
+    produced them -- which is the whole reason this kind exists.
+    """
+    req, res = event.req, event.res or {}
+    depth = req.get("depth") or 0
+    lead = "  " * min(int(depth), 8)
+    error = event.meta.get("error")
+    label = "{}{}".format(req.get("name", "?"),
+                          "" if req.get("type") == "chain" else
+                          " [{}]".format(req.get("type")))
+    if error:
+        return "{}{} raised {}".format(lead, label, error.get("type"))
+    kids = res.get("children") or 0
+    fan = "  ({} child{})".format(kids, "" if kids == 1 else "ren") if kids else ""
+    return "{}{} → {}{}".format(lead, label,
+                                _truncate(json.dumps(res.get("value"), default=str), 46),
+                                fan)
+
+
+def _render_chain(event: Event, resolved: Dict[str, Any]) -> str:
+    """A LangChain node as its place in the run tree, then its payloads.
+
+    Printed as prose for the same reason an MCP event is: node, path, depth,
+    inputs and outputs are five named fields, and burying them in the JSON they
+    are stored as would give back the opacity this milestone exists to remove.
+    ``--raw`` still prints the JSON.
+    """
+    req = resolved.get("req") or {}
+    res = resolved.get("res") or {}
+    out = ["chain · event {} · {} · {}".format(
+        event.i, req.get("framework", "?"), event.site)]
+    if event.dur_ms:
+        out[0] += "  ({:.0f}ms)".format(event.dur_ms)
+
+    out.append("")
+    out.append("  node     {}".format(req.get("name", "?")))
+    out.append("  type     {}".format(req.get("type", "?")))
+    out.append("  path     {}   (depth {})".format(
+        req.get("path", "?"), req.get("depth", 0)))
+    if req.get("step"):
+        out.append("  branch   {}".format(req["step"]))
+    children = res.get("children")
+    if children:
+        out.append("  children {}".format(children))
+    out.append("  inputs   {}".format(_indent_after_first(
+        json.dumps(req.get("inputs"), indent=2, ensure_ascii=False, default=str), 11)))
+    out.append("  outputs  {}".format(_indent_after_first(
+        json.dumps(res.get("outputs"), indent=2, ensure_ascii=False, default=str), 11)))
+
+    error = event.meta.get("error")
+    if error:
+        out.append("  raised   {}: {}".format(error.get("type"), error.get("message")))
+    out.append("")
+    out.append("(a chain node is structure, not a boundary: the model call it "
+               "made is its own event)")
+    return "\n".join(out) + "\n"
 
 
 def _render_mcp(event: Event, resolved: Dict[str, Any]) -> str:
@@ -244,6 +307,19 @@ def _record_once(command: Sequence[str], tape_dir: Path, **env_extra: str):
     return run_id, subprocess.run(resolved, env=env)
 
 
+def _match_adapters(env: Dict[str, str], trace: Trace) -> None:
+    """Turn on for the child whichever adapters the recording used.
+
+    A LangChain node is recorded only when the adapter is installed, so
+    replaying a run that has chain events without it would leave every one of
+    them unclaimed and report "the agent took a different path" -- when in fact
+    the only thing that changed is that nobody was watching. The tape knows
+    which adapters were on; the replay should not need to be told again.
+    """
+    if any(event.kind == "chain" for event in trace.events):
+        env[langchain_mod.ENV_VAR] = "1"
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     if not args.command:
         sys.stderr.write("tape run: give me a command, e.g. tape run python agent.py\n")
@@ -252,8 +328,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     tape_dir = _tape_dir(args)
     paths.ensure_tape_dir(tape_dir)
 
+    extra = {langchain_mod.ENV_VAR: "1"} if getattr(args, "langchain", False) else {}
     try:
-        run_id, completed = _record_once(list(args.command), tape_dir)
+        run_id, completed = _record_once(list(args.command), tape_dir, **extra)
     except FileNotFoundError as exc:
         sys.stderr.write("tape run: no such command: {}\n".format(exc.filename))
         return 127
@@ -318,6 +395,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         "REELTIME_ANNOUNCE": "1",
         "TAPE_DIR": str(tape_dir),
     })
+    _match_adapters(env, trace)
     if args.to is not None:
         env["REELTIME_STOP_AT"] = str(args.to)
     if args.realtime:
@@ -455,6 +533,7 @@ def cmd_fork(args: argparse.Namespace) -> int:
     })
     if override_path:
         env["REELTIME_FORK_OVERRIDE"] = override_path
+    _match_adapters(env, trace)
     bootstrap = str(Path(__file__).resolve().parent / "_bootstrap")
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = bootstrap + (os.pathsep + existing if existing else "")
@@ -736,6 +815,9 @@ def cmd_show(args: argparse.Namespace) -> int:
         if event.kind == "mcp":
             sys.stdout.write(_render_mcp(event, resolved))
             return 0
+        if event.kind == "chain":
+            sys.stdout.write(_render_chain(event, resolved))
+            return 0
     print(json.dumps(resolved, indent=2, ensure_ascii=False))
     return 0
 
@@ -756,6 +838,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command_name")
 
     run = sub.add_parser("run", help="record an unmodified command")
+    run.add_argument("--langchain", action="store_true",
+                     help="also record LangChain chains, agents and tools "
+                          "as `chain` events (needs langchain-core)")
     run.add_argument("command", nargs=argparse.REMAINDER,
                      help="the command to run, e.g. python agent.py")
     run.set_defaults(func=cmd_run)
@@ -784,7 +869,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff_cmd.add_argument("b", help="the later run: id, prefix, or 'last'")
     diff_cmd.add_argument("--only", action="append", metavar="KIND",
                           help="compare only these kinds (llm, tool, http, mcp, "
-                               "rand, time, uuid; repeatable)")
+                               "chain, rand, time, uuid; repeatable)")
     diff_cmd.add_argument("--json", action="store_true",
                           help="machine-readable output")
     diff_cmd.set_defaults(func=cmd_diff)

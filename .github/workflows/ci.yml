@@ -56,6 +56,33 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -m wheel -v
 
+  langchain-floor:
+    # The README states a supported langchain-core range; `[dev]` pins the top
+    # of it, so without this job the bottom of it is a claim nobody checks. The
+    # callback contract is what the adapter depends on, and it lives in
+    # langchain-core -- so the floor is tested against that package alone, with
+    # the tests that need `langchain` and `langchain-openai` deselected.
+    #
+    # If this job goes red, the honest fix is to raise MINIMUM in
+    # core/langchain.py and the range in the README -- not to work around it.
+    name: langchain-core floor · ${{ matrix.langchain }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        langchain: ["0.3.*"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pip install "langchain-core==${{ matrix.langchain }}"
+      # `langchain` and `langchain-openai` pin a newer core, so uninstall them
+      # rather than let pip drag it back up underneath the test.
+      - run: pip uninstall -y langchain langchain-openai langgraph
+      - run: REELTIME_LANGCHAIN_FLOOR=1 pytest tests/test_langchain.py -q
+
   package:
     name: package metadata
     runs-on: ubuntu-latest

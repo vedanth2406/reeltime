@@ -19,8 +19,9 @@ Or scope it::
     print(run.summary.line())
 
 Records today: every HTTP call (httpx and requests, streaming included),
-``@tape.tool`` functions, MCP sessions (``tape.mcp.connect``), randomness,
-uuids, and clock reads.
+``@tape.tool`` functions, MCP sessions (``tape.mcp.connect``), LangChain
+chains and agents (``tape.langchain.install()``), randomness, uuids, and clock
+reads.
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
-from . import mcp
+from . import langchain, mcp
 from .core.spans import span
 from .core.tape import (
     Mode,
@@ -65,6 +66,7 @@ __all__ = [
     "span",
     "redact",
     "mcp",
+    "langchain",
     "tool",
     "wrap",
     "wrap_all",
@@ -107,6 +109,27 @@ def record_event(
     return tape.record(kind, req, res, **kwargs)
 
 
+def _install_adapters() -> None:
+    """Arm the framework adapters the parent process asked for.
+
+    ``tape run --langchain`` sets the variable, and ``tape replay`` sets it
+    again when the tape has chain events in it -- so an adapter is on for the
+    replay exactly when it was on for the recording, without the user having to
+    remember which. Importing langchain-core costs about a second, which is why
+    this is opt-in rather than "whenever it is installed".
+    """
+    from .core import langchain as _langchain
+
+    if not os.environ.get(_langchain.ENV_VAR):
+        return
+    try:
+        _langchain.install()
+    except Exception as exc:  # a missing or unsupported framework, said once
+        import warnings
+
+        warnings.warn("reeltime: {}".format(exc), RuntimeWarning)
+
+
 def _autoinstall_from_env() -> None:
     """Start recording or replaying from environment configuration.
 
@@ -115,6 +138,7 @@ def _autoinstall_from_env() -> None:
     anything else.
     """
     mode = os.environ.get("REELTIME_MODE", "record")
+    _install_adapters()
     if mode not in ("replay", "fork"):
         install(run_id=os.environ.get("REELTIME_RUN_ID") or None)
         return

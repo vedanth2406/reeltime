@@ -127,6 +127,12 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
   fields — tool discovery included, so a server that changed what it offers
   shows up as a tool set change rather than as a mystery divergence. Replay
   never starts the server. Nothing else records MCP at all.
+- **LangChain agents record their graph, not just their POSTs.** Chains, tools,
+  retrievers and agent steps become `chain` events carrying node identity,
+  path, depth and fan-out — so a run that took a different route through the
+  graph reports *that*, instead of two message arrays differing somewhere.
+  Works for LangGraph and `create_agent` too, and `tape run --langchain` needs
+  no edit to your script.
 - **Fork a run from any step, with the fix applied.** `tape fork <run> --at 13
   --patch 'llm.system+="Ask first."'` replays the first 13 events — free and
   identical — then goes live from there. Testing a prompt change costs one
@@ -157,6 +163,8 @@ tape ls                      # what you have recorded
 tape replay <run>            # re-run it offline, free
 tape show <run> 14 --context # what the model actually read at step 14
 tape doctor python agent.py  # why is this run not reproducible?
+
+tape run --langchain python agent.py   # LangChain/LangGraph structure too
 ```
 
 `tape run` needs no import in your code — it injects a `sitecustomize` on
@@ -475,6 +483,132 @@ mock server with no credentials and no network.
 before this adapter existed still lines up against one recorded since. `--only`
 is not folded: `--only mcp` means MCP events.
 
+## LangChain agents
+
+A LangChain agent is a *tree*. Intercepting at the transport layer sees only its
+leaves — two POSTs with a growing message array — and none of the shape that
+decided them. So a LangChain node gets its own event kind, carrying node
+identity, the path it sits on, its depth, and its inputs and outputs.
+
+```python
+import reeltime as tape
+
+tape.langchain.install()      # before the first chain runs
+agent.invoke({"messages": [...]})
+```
+
+or, without editing the script at all:
+
+```console
+$ tape run --langchain python agent.py
+```
+
+`tape.langchain.handler()` returns a callback handler if you would rather scope
+it: `chain.invoke(x, config={"callbacks": [handler]})`. It works for LangGraph
+and for `langchain.agents.create_agent` too — both route through the same
+callbacks.
+
+```console
+$ tape show last
+   0  llm        1ms  agent.py:41   gpt-4o-mini 40→12
+   1  chain     13ms  agent.py:41     model → ""  (1 child)
+   2  chain      0ms  agent.py:41       word_count [tool] → "9"
+   3  chain      1ms  agent.py:41     tools → "9"  (1 child)
+   4  llm        0ms  agent.py:41   gpt-4o-mini 120→12 Counted 9 words.
+   5  chain      2ms  agent.py:41     model → "Counted 9 words."  (1 child)
+   6  chain     17ms  agent.py:41   LangGraph → "Counted 9 words."  (3 children)
+
+$ tape show last 2
+chain · event 2 · langchain · agent.py:41  (0ms)
+
+  node     word_count
+  type     tool
+  path     LangGraph/tools/word_count   (depth 2)
+  inputs   {"text": "the quick brown fox jumps over the lazy dog"}
+  outputs  {"content": "9", "type": "tool", …}
+```
+
+**A chain node is structure, not a boundary.** A callback handler is an
+observer: it is told a node started, it cannot stop the node from running. If a
+node opened a recording boundary the model call inside it would be suppressed
+at record time and would then go live on replay — the one thing this tool must
+never do. So chain events nest *around* other events rather than standing in
+for them.
+
+The corollary is what keeps the count honest: **the adapter does not record LLM
+nodes.** `on_chat_model_start` fires for the same crossing the transport shim
+already records with the wire bytes, the token counts and the streaming chunks,
+so recording it again would be two events for one boundary. Every other node —
+chains, tools, retrievers, prompts, parsers, agent steps — becomes an event.
+One rule, because a rule with exceptions is one people get wrong.
+
+A LangChain *tool* node that makes an HTTP call is therefore two events, and
+deliberately: one `chain` event for the node and one `http` event for the
+crossing inside it. They are different things at different levels. If you want
+the tool's result held still on replay instead, wrap the function in
+`@tape.tool` — then the body does not run at all.
+
+**A changed graph is reported as a changed graph.** Give the agent one more
+tool and it goes round the loop again; the diff names that as structure rather
+than as two message arrays that differ somewhere:
+
+```console
+$ tape diff <a> <b>
+step 0–4  identical (5 events)
+step 6   chain   only in B: reverse
+step 7   chain   only in B: tools
+step 10  chain   chain fan-out changed
+                 chain fan-out changed: 3 child nodes  →  5 child nodes
+```
+
+`examples/langchain_agent.py` runs that end to end against an embedded mock
+provider — no API key and no network.
+
+**Replay re-runs the chain for real**, with its model calls served from the
+tape, and each node consumes its recorded event: a chain whose shape changed
+reports drift rather than passing unnoticed. `tape replay` turns the adapter on
+by itself when the tape has chain events in it, so you do not have to remember
+which run was recorded with what.
+
+A node is identified by *where it sits* — its path through the run tree, its
+depth, and which branch of a sequence or map it is — never by its inputs. A
+node's inputs are a consequence of the model calls above it, which the tape
+already holds still; hashing them would report drift on every node downstream
+of a prompt tweak and bury the one place the run actually changed. LangChain's
+per-run message ids are stripped for the same reason: they are the only part of
+a node payload that differs between two identical runs, so leaving them in
+would make `tape diff` report noise at every step.
+
+`chain` folds into `http` for diff alignment the way `llm` and `mcp` do, so a
+run recorded before this adapter existed still lines up against one recorded
+since. It is deliberately **not** folded for replay matching: a wrong pairing in
+a diff costs a confusing line, while a wrong bucket in the matcher would serve
+an HTTP request a chain node's payload.
+
+### Supported versions
+
+| | |
+|---|---|
+| Tested against | `langchain-core` **0.3** and **1.5**, both in CI |
+| Declared range | `>=0.3,<2` |
+| Also covered | `langchain`, `langgraph`, `langchain-openai` — all route through langchain-core's callbacks |
+
+LangChain's internals move fast, and the callback contract is not promised
+across a major version. An untested version is **refused with the range it
+needs**, rather than recorded and hoped for — a trace that looks right and
+replays wrong is worse than no trace. Override with
+`tape.langchain.install(allow_unsupported=True)` if you want to try it anyway.
+
+The floor is a CI job, not a claim: it pins `langchain-core` to 0.3 and runs the
+adapter's suite against it. It has already earned its place — 0.3 spells a
+message id `run--…` and 1.x spells it `lc_run--…`, and that job is what found
+it.
+
+There are **no `--patch` fields for `chain`**, and there will not be: a callback
+handler cannot change what a chain does, so a field that parsed and reported
+itself as applied would change nothing. That is the exact failure `tool.args`
+shipped with for two releases. Patch the `llm` boundary inside the node instead.
+
 ## Doctor
 
 `tape doctor` answers a question you have before you have any traces: **what
@@ -594,7 +728,31 @@ Being precise about the boundary is the point.
   an explicitly constructed generator is an object you can seed yourself.
 - **C-extension nondeterminism.** Anything reading the clock or entropy below
   the Python layer is invisible.
-- **Non-`httpx` network stacks.** `aiohttp` and raw sockets are not intercepted.
+- **`aiohttp` — guarded, not silently unsupported.** Still not intercepted, but
+  as of 0.5.0 a replay that reaches an aiohttp request **raises** instead of
+  quietly calling out to the network, and a recording that reaches one warns
+  once. Wrap the call in a `@tape.tool` function and reeltime records its
+  *result* — which is the boundary replay actually needs — and the guard steps
+  aside.
+
+  Why it is not intercepted, since that is the interesting half: httpx
+  publishes `BaseTransport.handle_request(Request) -> Response` and promises
+  it, which is why the httpx shim is small and survives SDK churn. aiohttp's
+  only public hook is `TraceConfig`, which is observe-only — it can record and
+  can never replay, the worst possible half — and its real seam is the private
+  `ClientSession._request` (33 parameters). Replay would mean fabricating a
+  `ClientResponse` over aiohttp's private connection contract; its
+  `StreamReader` calls `protocol.resume_reading(resume_parser=…)`, a keyword in
+  no public interface. That was prototyped and it works: two fake objects and
+  eight private attributes, all needing re-verification on every aiohttp
+  release, to cover a stack no LLM SDK reeltime targets is built on. So the
+  cost went into the guard instead, which is the part that was actually
+  dangerous.
+- **Raw sockets, `urllib`, gRPC and WebSockets.** Not intercepted, and without
+  a guard. `botocore`/`boto3` (so Bedrock) is on `urllib3` and is the largest
+  remaining gap; the OpenAI Realtime API is a WebSocket, which is not a
+  request/response boundary at all. `@tape.tool` is the supported way to put a
+  boundary around them today.
 
 ## How this compares
 
@@ -606,6 +764,7 @@ Being precise about the boundary is the point.
 | Streaming record/replay | ✅ chunk-exact | ✕ refused | partial | n/a |
 | Full context inspection | ✅ `--context`, `--diff` | inspect / timeline / HTML viewer | ✕ | ✅ in the UI |
 | MCP sessions as first-class events | ✅ both transports, tool-set diff | ✕ (an `mcp` extra with no code behind it) | ✕ | ✕ |
+| LangChain graph structure as events | ✅ node, path, depth, fan-out; graph diff | ✕ | ✕ | ✅ in the UI |
 | Keeps the trace when the run crashes | ✅ flushed per event | ✕ discards it | n/a | ✅ |
 | Ambient nondeterminism | recorded, per call site | *frozen* (seeded, pinned clock) | ✕ | ✕ |
 | Step controls (`--to`, `--step`) | ✅ | ✕ | ✕ | ✕ |
@@ -676,8 +835,9 @@ tape.install(
 
 Runnable agents, all covered by the test suite — see [examples/](examples/).
 The two SDK examples import nothing from reeltime, which is the zero-edit claim
-made concrete. `mcp_agent.py` needs no API key and no network: it drives the
-mock MCP server next to it.
+made concrete. `mcp_agent.py` and `langchain_agent.py` need no API key and no
+network: one drives the mock MCP server next to it, the other an embedded mock
+provider.
 
 ## Roadmap
 
@@ -690,9 +850,9 @@ mock MCP server next to it.
 | 5 | `tape fork <run> --at N --patch …`, **v0.2.0** | ✅ |
 | 6 | `tape diff`, divergence-point reporting, **v0.3.0** | ✅ |
 | 5.5 | MCP adapter — `mcp` events, both transports, tool-set diff | ✅ |
-| 7 | `tape doctor` — find a run's nondeterminism sources | ✅ |
-| 9 | LangChain adapter, remaining framework coverage | **next** |
-| 10 | Web UI | |
+| 7 | `tape doctor` — find a run's nondeterminism sources, **v0.4.0** | ✅ |
+| 9 | LangChain adapter — `chain` events, graph diff, the aiohttp guard, **v0.5.0** | ✅ |
+| 10 | `tape ui` — a local viewer | **next** |
 | 11 | Overhead benchmarks, docs site | → v1.0 |
 
 MCP shipped early on purpose: no other record/replay tool captures MCP sessions,
@@ -706,8 +866,8 @@ of thing that changes an agent's behaviour invisibly. See
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 622 tests
-pytest --cov --cov-report=term-missing  # core/ is at 94%
+pytest                                  # 738 tests
+pytest --cov --cov-report=term-missing  # core/ is at 95%
 python examples/m3_replay_speed.py      # the benchmark above
 ```
 

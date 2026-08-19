@@ -14,20 +14,30 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 
 | | |
 |---|---|
-| Milestones done | M1–M7, including M5.5. There is no M8 — see the roadmap |
-| Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0` — all on PyPI |
-| In the tree | `0.4.0`, clean. Nothing unreleased, nothing unpushed |
-| Tests | 622 passing, 6 deselected (the wheel gate), 95% on `core/` |
+| Milestones done | M1–M9, including M5.5. There is no M8 — see the roadmap |
+| Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0`, `0.5.0` — all on PyPI |
+| In the tree | `0.5.0`, clean. Nothing unreleased, nothing unpushed |
+| Tests | 738 passing, 6 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
-| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0` — the last three verified against their artifacts |
+| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
-**Next: M9 — the LangChain adapter and the rest of the framework coverage.**
-There is no M8; the slot was emptied by the resequencing, not skipped. The
-roadmap at the bottom says why.
+**Next: M10 — the web UI.** There is no M8; the slot was emptied by the
+resequencing, not skipped. The roadmap at the bottom says why.
 
-There is no outstanding release work. `0.4.0` is published, tagged at the
+There is no outstanding release work. `0.5.0` is published, tagged at the
 commit it was built from, and verified.
+
+### Two things to know before the next release
+
+- `pytest -m wheel` matters more than usual now: `core/langchain.py`,
+  `reeltime/langchain.py` and `core/http/aiohttp_guard.py` are all new modules
+  in the wheel, so a packaging change can drop one without the unit suite
+  noticing.
+- The README states a supported `langchain-core` range. If the CI
+  `langchain-core floor` job is red, raise `MINIMUM` in `core/langchain.py`
+  **and** the range in the README — do not work around it. That job has already
+  caught one silent payload rename; it is not decoration.
 
 ### The `v0.3.0` tag drift — resolved, and why `RELEASING.md` exists
 
@@ -65,9 +75,11 @@ the tag matches the artifact before announcing it.
 | **6** | `tape diff <a> <b>` — signature alignment, divergence-point reporting, `--only`, `--json` |
 | **5.5** | MCP adapter: `mcp` events, `tape.mcp.connect` over stdio and HTTP/SSE, `tape.mcp.wrap`, discovery recording, readable `tape show`, tool-set reporting in `tape diff`, `--patch mcp.<tool>.result=`, a mock-server example |
 | **7** | `tape doctor` — run a command N times, report each boundary where the runs disagreed with its call site and a suggestion, plus the path split. `--runs`, `--json`, `--fail-on-findings` |
+| **9** | LangChain adapter: `chain` events, `tape.langchain.install()` / `handler()`, `tape run --langchain`, node tree in `tape show`, graph-change reporting in `tape diff`, a version gate with a CI floor job, an example, and the `aiohttp` guard |
 | **—** | The patch-grammar audit: `tool.args` and `mcp.args` implemented, `http.url` fixed, `+=`/`~=` on a JSON document refused at parse time, the fork footer written to disk, and `tests/test_patch_effects.py` |
 
 CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `show`.
+Event kinds today: `llm`, `http`, `tool`, `mcp`, `chain`, `rand`, `time`, `uuid`.
 
 ## Releases
 
@@ -85,6 +97,13 @@ CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `sh
 - **0.4.0** — M5.5 (MCP sessions), M7 (`tape doctor`), the patch-grammar audit,
   and the fork-footer fix. `tape doctor` leads the README: it is the first thing
   in the project that is useful before you have recorded anything.
+- **0.5.0** — M9: the LangChain adapter (`chain` events), the graph-change diff,
+  `tape run --langchain`, the `langchain-core` version gate with its CI floor
+  job, and the aiohttp guard. **The guard is a behaviour change** and the
+  CHANGELOG entry leads with it: an aiohttp request during a replay used to
+  reach the real network silently and now raises. Anyone upgrading with aiohttp
+  installed and a replay that touches it will see a new failure — and that
+  failure was always there, just invisible.
 
 
 ---
@@ -286,6 +305,97 @@ and the bootstrap directory off `PYTHONPATH`. The SDK's own default happens to
 pass only a six-name allowlist, but a caller passing `env=os.environ` to get one
 variable through would hand over all of them.
 
+**A LangChain chain node is structure, not a boundary.** Everything else in the
+adapter follows from this. A callback handler is an *observer*: it is told a
+node started, it cannot stop the node from running. If a chain node opened a
+recorder boundary, the model call inside it would be suppressed at record time
+— and would then go live on replay, because a callback cannot serve a result
+either. So chain events nest *around* other events rather than standing in for
+them, and the adapter uses `record()`, never `capture()`.
+
+**The adapter does not record LLM nodes.** That is what keeps the event count
+honest. `on_chat_model_start` fires for exactly the crossing the transport shim
+already records, and with less: the callback has no wire bytes, no token
+counts, no chunk list. Recording both would be two events for one boundary.
+Model nodes are still *tracked* — their children need the right depth — just
+never written. Everything else becomes an event, because a rule with exceptions
+is a rule people get wrong.
+
+A LangChain *tool* node that makes an HTTP call is therefore two events on
+purpose: one `chain` for the node, one `http` for the crossing inside it. They
+are different things at different levels. Wrapping the function in `@tape.tool`
+instead makes it one event and stops the body running on replay.
+
+**A chain node's identity is where it sits, never what flowed through it.**
+`CONTENT_FIELDS["chain"]` is `(framework, name, type, path, depth, step)` and
+deliberately excludes `inputs`. A node's inputs are a *consequence* of the model
+calls above it, which the tape already holds still; hashing them would report
+drift on every node downstream of a prompt tweak and bury the one place the run
+actually changed. Same reasoning as "doctor compares results, never requests".
+
+**`chain` folds into `http` for alignment but not for matching.** This is a
+third distinction alongside `EQUIVALENT_KINDS` and `FILTER_ALIASES`, and
+`matching.align_key` exists for it. Alignment is advisory — a wrong pairing
+costs a confusing line in a report. Matching is not: a request folded into the
+wrong bucket can be served a chain event's payload where an HTTP response was
+expected, which is a silent wrong answer rather than a clean `TapeMiss`. `llm`
+and `mcp` fold in both places because they genuinely *are* the same crossing as
+an `http` event; a chain node never is.
+
+**Every node in a run tree inherits the root's call site.** LangGraph runs nodes
+on a thread pool, so a child's callback frequently fires on a stack with no user
+frame on it at all, and the nearest answer is then a line number inside
+langchain — which moves on every upgrade and would drift every event in the run.
+Only a root node walks the stack. The consequence is that all of an agent's
+chain events share one site and are matched in recorded order, disambiguated by
+the structural content key.
+
+**The handler sets `run_inline = True` and `raise_error = True`, and both are
+load-bearing.** This is where LangChain's version of M5.5's contextvar problem
+lives, and it is worse. Without `run_inline`, `ahandle_event` dispatches a
+synchronous handler to a thread-pool executor on *every* async path: the
+executor thread's stack contains no user frame at all (measured — it is
+`thread.py:_worker` all the way down), so call-site identity is destroyed, and
+the handlers are `asyncio.gather`ed so write order stops matching event order.
+Without `raise_error`, LangChain catches every exception a handler raises and
+logs it at warning level — so a `TapeMiss` during a replay would be *swallowed*
+and the replay would sail past a call it could not match. That is the exact
+silent divergence design principle 4 forbids.
+
+Related: on the async path even an inline handler sees only the frame where the
+event loop was entered, because a suspended coroutine's frame is not on the
+stack. That is pre-existing (async HTTP events already behave this way), stable
+across record and replay, and therefore harmless — but it is why chain identity
+lives in the content key rather than in the line number.
+
+**LangChain's per-run message ids never reach the trace.** They are the *only*
+part of a node payload that differs between two identical runs — measured by
+running the same agent twice and diffing every callback argument, not assumed —
+and leaving them in would make every downstream node's inputs differ, so
+`tape diff` would report noise at every step. `core/langchain.stable()` drops
+`id` keys whose value is a UUID or a run-derived id. A `tool_call` id does not
+look like one and survives, which is right: it is part of the conversation.
+
+**The prefix on that id is `run--` in langchain-core 0.3 and `lc_run--` in
+1.x.** The CI `langchain-core floor` job is what found that, on its first run.
+It is the concrete argument for both the version gate and the floor job: the
+callback contract is stable, the payloads underneath it are not.
+
+**`chain` has no `--patch` fields, and should not get any.** A callback handler
+cannot alter what a chain does, so a field that parsed and reported itself as
+applied would change nothing — which is exactly what `tool.args` did for two
+releases. `patch.declared_fields()` therefore lists nothing for `chain`, and
+`tests/test_patch_effects.py` needs no case. Patch the `llm` boundary inside the
+node instead. **If that ever changes, all four steps still apply.**
+
+**aiohttp is not intercepted, and the guard is the point.** See "The framework
+audit" for the assessment. The part worth remembering: reeltime patches
+`aiohttp.ClientSession._request` *to refuse it*, not to record it. A replay that
+reaches an aiohttp request stops with a message naming the URL; a recording
+warns once. aiohttp is **not** added to the footer's `intercepted` list, because
+that list answers "why was my call not recorded?" and listing it would answer
+wrongly.
+
 **A doctor finding is a call site, not an event.** An agent in a loop reads the
 clock forty times, and forty findings bury the one that matters. Findings are
 grouped by `(site, kind, name)` and counted; the report is as long as the number
@@ -323,20 +433,89 @@ model yields `null`, never a guess.
 
 ---
 
+## The framework audit (M9)
+
+M9 asked what else the framework layer needs to be honestly covered. This is the
+answer, including the things that were **not** built — recorded here so the next
+session does not re-derive it, and so that "not covered" never means "nobody
+looked".
+
+### Built
+
+| | |
+|---|---|
+| **LangChain** | `chain` events via the callback adapter. Covers `langchain`, `langgraph` and `langchain-openai` too — all of them route through `langchain-core`'s callbacks, so `create_agent` and a LangGraph graph are recorded by the same code, verified end to end. |
+| **aiohttp** | Not intercepted. Guarded, so it cannot be silent. |
+
+### Assessed and not built
+
+**aiohttp — leave unsupported, guard the consequence.** The seam is the
+problem, not the demand. httpx publishes
+`BaseTransport.handle_request(Request) -> Response`, a documented extension
+point with a public `Response` constructor; that is why the httpx shim is small
+and survives SDK churn. aiohttp's only public hook is `TraceConfig`, which is
+observe-only — it can neither substitute a response nor supply a chunk, so it
+can record and can never replay, which is the worst possible half. The real seam
+is the private `ClientSession._request` (33 parameters).
+
+Replay was prototyped, and it works, which is why the recommendation is a cost
+argument and not an impossibility claim. Fabricating a `ClientResponse` from
+recorded bytes needs: a fake protocol implementing
+`resume_reading(resume_parser=…)` — a keyword in no public interface — a fake
+stream writer with `output_size` and five methods, four private attributes set
+by hand, and a live or faked `ClientSession`. Every one of those would need
+re-verifying on each aiohttp release. The httpx equivalent is one public
+constructor.
+
+And the demand is thin: OpenAI, Anthropic, Google GenAI and the MCP SDK are all
+on httpx or httpx2. The realistic exposure is an agent's own tool code, which
+`@tape.tool` already covers at a *better* boundary — replay needs the tool's
+result, not the request inside it.
+
+What was unacceptable was the consequence, and that is what got built instead:
+`core/http/aiohttp_guard.py` patches the same private method to **refuse**
+during a replay and to **warn once** during a recording. Reconsider the full
+shim only if aiohttp grows a public transport abstraction, or if a provider
+reeltime targets moves onto it.
+
+**Everything else, and why not.**
+
+| Stack | Position |
+|---|---|
+| **LlamaIndex** | The strongest candidate for M12 if a framework adapter is wanted again. It has its own `CallbackManager` / `BaseCallbackHandler` with `CBEventType`, structurally similar to LangChain's, so the `Tracker` in `core/langchain.py` would mostly transfer — the shell is what would be new. Not built because one framework adapter is enough to prove the shape, and LangChain is the one people are debugging. |
+| **LiteLLM, Instructor, Ollama, Mistral, Cohere** | Already covered, with no work. All are httpx clients, so the transport shim records them today; they are unenriched (no model/token/cost) only until someone writes a decoder, which is a pure function and a pricing row. |
+| **Bedrock (`boto3` / `botocore`)** | Genuinely uncovered — botocore is on `urllib3`, below every shim. This is the largest real gap after aiohttp. `urllib3` does have a seam (`HTTPConnectionPool.urlopen`), so a shim is more tractable than aiohttp's; it is a milestone of its own, not a footnote to this one. `aiobotocore` is on aiohttp and inherits that position. |
+| **OpenAI Realtime / voice** | A WebSocket, not a request/response boundary at all. Recording it means recording a bidirectional message stream with timing — closer to the streaming chunk work than to the HTTP shim, and a design question in its own right. Not attempted. |
+| **Vertex AI over gRPC** | Same shape of problem as WebSockets: no HTTP boundary to sit under. The REST transport is covered. |
+| **CrewAI, AutoGen, Pydantic AI, OpenAI Agents SDK** | Each has its own tracing or hook surface, and each would be its own adapter. All of them make their model calls over httpx, so **the LLM boundary is already recorded** for every one — what is missing is only the structural layer, which is exactly what M9 built for LangChain. Worth doing on demand rather than speculatively. |
+
+The pattern worth carrying forward: **the transport shim covers the boundary,
+an adapter covers the shape.** Nothing on that list is unrecorded at the
+boundary except Bedrock, aiohttp, WebSockets and gRPC — and three of the four
+are uncovered for the same reason, which is that they are not HTTP request/
+response through a client with a public transport seam.
+
+---
+
 ## Running things
 
 ```bash
 cd ~/newproject/reeltime
 pip install -e ".[dev]"
 
-pytest                                   # 622 tests; the wheel gate is deselected
+pytest                                   # 738 tests; the wheel gate is deselected
 pytest --cov --cov-report=term-missing   # core/ is at 95%; the bar is 85%
 pytest -m wheel                          # the symlinked wheel-install gate (slow)
 pytest -m wheel -v                       # what CI runs
 
+# What the CI `langchain-core floor` job does, locally:
+pip install "langchain-core==0.3.*" && pip uninstall -y langchain langchain-openai
+REELTIME_LANGCHAIN_FLOOR=1 pytest tests/test_langchain.py -q
+
 python examples/m3_replay_speed.py       # the ~80× number the README quotes
 python examples/truncation_bug.py        # the demo; no API key needed
 tape run python examples/mcp_agent.py    # the MCP example; no API key either
+tape run python examples/langchain_agent.py   # the LangChain example; no key either
 vhs demo.tape                            # re-record demo.gif (needs `brew install vhs`)
 ```
 
@@ -371,6 +550,7 @@ tape show last 1 --context     # what the model actually read
 tape fork last --at 1 --patch 'llm.system+="Ask first."'
 tape diff <a> <b>              # where two runs stopped being the same run
 tape doctor python agent.py    # what is actually nondeterministic here
+tape run --langchain python agent.py   # LangChain/LangGraph structure too
 ```
 
 ```python
@@ -388,8 +568,8 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | 1–6 | see above | ✅ |
 | 5.5 | **MCP adapter** | ✅ |
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
-| 9 | LangChain adapter, remaining framework coverage | **next** |
-| 10 | Web UI | |
+| 9 | LangChain adapter, remaining framework coverage | ✅ |
+| 10 | Web UI | **next** |
 | 11 | Overhead benchmarks, docs site → v1.0 | |
 
 **There is no M8.** The original spec §11 had M8 = web UI. The resequencing
@@ -398,8 +578,9 @@ nothing was deferred and nothing is missing. The number is simply vacant, and
 the row is left out rather than backfilled — closing the gap by renumbering is
 how it got mistaken for skipped work once already.
 
-M9, concretely: a LangChain callback adapter, and whatever else the framework
-layer needs to be honestly covered. It is the last adapter-shaped milestone.
+M9 shipped the LangChain callback adapter and closed the framework question:
+see "The framework audit" above for what else was considered and why it was
+not built. It was the last adapter-shaped milestone.
 
 M11 is what stands between here and v1.0: measure the recording overhead per
 boundary kind and publish a docs site. The README currently claims ~2 ms per

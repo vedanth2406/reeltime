@@ -3,6 +3,112 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-19
+
+M9 — framework coverage. One adapter, and one deliberate non-adapter.
+
+### Behaviour change: aiohttp on replay
+
+**If you have `aiohttp` installed, read this before upgrading.** reeltime has
+never intercepted aiohttp, and until now that meant an aiohttp request during a
+`tape replay` reached the **real network**, with no event and no error — a
+replay that quietly did the real thing while reporting itself as offline and
+free.
+
+As of 0.5.0 that raises. A replay that reaches an aiohttp request stops with a
+`TapeError` naming the method and URL; a *recording* that reaches one warns
+once and is otherwise unchanged. Nothing about httpx, httpx2 or requests
+changes.
+
+If a run of yours starts failing on upgrade, the replay was already wrong — it
+was calling out to the network. Two ways forward:
+
+- wrap the call in a `@tape.tool` function, which is the supported fix. reeltime
+  then records its *result*, which is the boundary replay actually needs, and
+  the guard steps aside because the request is no longer the outermost
+  boundary; or
+- `tape.install(http=False)` to turn off HTTP interception entirely, if you
+  were relying on live calls during replay on purpose.
+
+aiohttp itself is still not intercepted, and that is a decision rather than a
+gap — the reasoning is under "Not added, on purpose" below.
+
+### Added
+
+- **LangChain runs are recorded as `chain` events**, not as opaque HTTP.
+  A LangChain agent is a tree, and the transport layer sees only its leaves —
+  two POSTs with a growing message array, and none of the shape that decided
+  them. A node now records its identity, the path it sits on, its depth, its
+  fan-out, and its inputs and outputs. `tape.langchain.install()` arms it for a
+  process; `tape run --langchain` needs no edit to the script; and
+  `tape.langchain.handler()` returns a callback handler to scope it to one
+  chain. LangGraph and `langchain.agents.create_agent` route through the same
+  callbacks and are covered by the same adapter.
+- **A chain node is structure, not a boundary.** A callback handler is an
+  observer: it cannot stop a node from running, so it must not open a recording
+  boundary either — the model call inside would be suppressed at record time
+  and would then go live on replay. Chain events nest *around* other events
+  rather than standing in for them.
+- **The adapter does not record LLM nodes.** `on_chat_model_start` fires for
+  the same crossing the transport shim already records with the wire bytes, the
+  token counts and the streaming chunks, so recording it again would be two
+  events for one boundary. Every other node — chains, tools, retrievers,
+  prompts, parsers, agent steps — becomes an event.
+- **`tape show N` renders a node as its place in the run tree**, and the run
+  listing indents by depth so an agent's shape is readable at a glance.
+  `--raw` still prints the JSON.
+- **`tape diff` reports a changed graph on its own line** — a node that moved
+  or changed depth, and a node whose fan-out changed — rather than diffing two
+  payloads that differ everywhere downstream of the first difference.
+- **`chain` folds into `http` for diff alignment**, the way `llm` and `mcp` do,
+  so a run recorded before this adapter existed still lines up against one
+  recorded since. It is deliberately *not* folded for replay matching: a wrong
+  pairing in a diff costs a confusing line, while a wrong bucket in the matcher
+  would serve an HTTP request a chain node's payload. `matching.align_key` and
+  `matching.kind_key` are now separate functions for that reason.
+- **`tape replay` and `tape fork` arm the adapter by themselves** when the tape
+  has chain events in it. The tape knows which adapters were on; the user
+  should not have to remember.
+- **An unsupported `langchain-core` is refused with the range it needs.** The
+  callback contract is not promised across a major version, and a trace that
+  looks right and replays wrong is worse than no trace.
+  `install(allow_unsupported=True)` overrides it. Tested against 0.3 and 1.5,
+  both in CI — the floor job is what caught langchain-core renaming a message
+  id prefix from `run--` to `lc_run--`.
+- **`examples/langchain_agent.py`**: a LangGraph agent with tools against an
+  embedded mock provider — no API key, no network — driven by the test suite.
+  Recording it twice with `LANGCHAIN_EXAMPLE_TOOLS=extended` and diffing the
+  two is the example's point.
+- **An `aiohttp` guard** — `ClientSession._request` is patched **to refuse a
+  request, never to intercept one**. See "Behaviour change" at the top of this
+  entry, which is where the details are.
+
+### Changed
+
+- `KINDS` gains `chain`; `--only chain` selects it.
+- `tape doctor` never reports a chain node as a nondeterminism source. Its
+  outputs are what the boundaries underneath it produced, so blaming the node
+  that carried a difference points at the wrong line — the same correction
+  doctor already makes for an unlike pairing. A node that *moved* still shows
+  up as a path split.
+
+### Not added, on purpose
+
+- **No `--patch` fields for `chain`.** A callback handler cannot change what a
+  chain does, so a field that parsed and reported itself as applied would
+  change nothing — the exact failure `tool.args` shipped with for two releases.
+  Patch the `llm` boundary inside the node instead.
+- **`aiohttp` interception.** httpx publishes
+  `BaseTransport.handle_request(Request) -> Response` and promises it; aiohttp's
+  equivalent seam is the private `ClientSession._request` (33 parameters), and
+  replay would mean fabricating a `ClientResponse` over aiohttp's private
+  connection contract — its `StreamReader` calls
+  `protocol.resume_reading(resume_parser=…)`, a keyword in no public interface.
+  Prototyped, and it works; it is two fake objects and eight private attributes
+  that would need re-verifying on every aiohttp release, for a stack no LLM SDK
+  reeltime targets is built on. The guard above closes the part that actually
+  mattered.
+
 ## [0.4.0] — 2026-08-18
 
 Two milestones and a grammar audit. `tape doctor` is the headline: it is the

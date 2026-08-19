@@ -91,7 +91,7 @@ Record: method, URL, headers (redacted), request body, status, response headers,
 
 Record the ordered chunk list, not just the assembled body — chunk boundaries must round-trip byte-for-byte. On replay, re-emit chunks. Default to instant emission; `--realtime` re-emits with recorded inter-chunk delays for reproducing timing-sensitive bugs (this matters for anything doing barge-in or early cancellation).
 
-Streaming also carries the token counts: providers send usage in a final chunk, so the provider decoders (§4.6) read the recorded chunk list rather than an assembled body.
+Streaming also carries the token counts: providers send usage in a final chunk, so the provider decoders (§4.7) read the recorded chunk list rather than an assembled body.
 
 ### 4.2 Local tools
 
@@ -127,7 +127,28 @@ Wrap an MCP client session so `tools/list` and `tools/call` are recorded as firs
 
 This is the clearest piece of unclaimed ground, and it is on a clock. As of 2026-08-17 no record/replay tool records MCP sessions — but AgentTape publishes an `mcp>=1.9` optional dependency in its package metadata with no MCP code behind it, which reads as intent. **Resequenced from M9 to M5.5** for that reason: it is cheap once M2's interception exists, and being demonstrably first is worth more than the framework adapter it used to share a milestone with. See `COMPETITIVE.md`.
 
-### 4.5 Redaction
+### 4.5 LangChain adapter
+
+*(Added 2026-08-19, M9.)* A LangChain run is a tree, and the transport layer
+sees only its leaves. Chains, tools, retrievers, prompts, parsers and agent
+steps are recorded as a `chain` event kind carrying node identity, the path
+through the run tree, depth, fan-out, inputs and outputs.
+
+The rule the design rests on: **a chain node is structure, not a boundary.** A
+callback handler is an observer — it cannot stop a node running, so it must not
+open a recording boundary either, or the model call inside would be suppressed
+at record time and go live on replay. Chain events therefore nest *around* other
+events. The corollary is that the adapter does not record LLM nodes at all: the
+transport shim already records that crossing, with the wire bytes the callback
+does not carry, and two events for one boundary is exactly what the
+outermost-boundary rule forbids.
+
+LangChain's internals move fast, so the adapter gates on a tested
+`langchain-core` range and refuses an untested one with the range it needs,
+rather than recording something subtly wrong. The bottom of that range is a CI
+job, not a claim.
+
+### 4.6 Redaction
 
 Before writing any event:
 
@@ -137,7 +158,7 @@ Before writing any event:
 
 Emit a warning listing what was redacted, so users know it happened.
 
-### 4.6 Provider decoders
+### 4.7 Provider decoders
 
 The §5 event schema wants `tokens` and `cost_usd` on every `llm` event, but principle 5 forbids intercepting at the SDK layer to get them. (AgentTape resolves this the other way, running an OpenAI SDK adapter alongside its HTTP interception — which is why it needs a new adapter per provider per major SDK version.)
 
@@ -317,15 +338,15 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 | M | Scope | Deliverable |
 |---|---|---|
 | **1** | Trace format, blob store, `Recorder`, `tape.install()`, ambient patches (rand/time/uuid) | Traces get written ✅ |
-| **2** | httpx transport shim (sync + async), `requests` fallback, provider decoders (§4.6), redaction on the HTTP path, `@tape.tool`, **streaming chunk capture**, `tape run`, `tape ls`, `tape show` | Records real OpenAI/Anthropic agents, streaming included ✅ |
+| **2** | httpx transport shim (sync + async), `requests` fallback, provider decoders (§4.7), redaction on the HTTP path, `@tape.tool`, **streaming chunk capture**, `tape run`, `tape ls`, `tape show` | Records real OpenAI/Anthropic agents, streaming included ✅ |
 | **3** | `Player`, three-tier matcher, `TapeMiss` errors, `tape replay --to/--step`, streaming re-emission (`--realtime`) | **Replay works — this is the core** ✅ |
 | **4** | `--context` inspection, `tape reindex`, README, PyPI publish | v0.1.0 released |
 | **5** | Fork + patch grammar, lineage tracking | `tape fork` ✅ |
 | **5.5** | MCP adapter | Unclaimed ground — take it before someone else does ✅ |
 | **6** | Alignment-based diff, divergence-point reporting first | `tape diff` ✅ |
 | **7** | `tape doctor` | Nondeterminism detection ✅ |
-| **9** | LangChain adapter, remaining framework coverage | Framework coverage |
-| **10** | Web UI | `tape ui` |
+| **9** | LangChain adapter, remaining framework coverage | Framework coverage ✅ |
+| **10** | Web UI | `tape ui` ← next |
 | **11** | Overhead benchmarks, docs site, examples dir | v1.0 |
 
 **Resequenced 2026-08-17 after the AgentTape analysis** (`COMPETITIVE.md`). Streaming capture moved from M9 into M2 and streaming replay into M3, because the closest competitor cannot record streams at all and most production agents use them. MCP moved from M9 to M5.5, because AgentTape ships an `mcp` extra with no code behind it and that lead will not last. The web UI moved from M8 to last, because a viewer is the most expensive thing in the plan and the least differentiating now that a competitor ships one — v1.0 no longer waits on it.
@@ -364,6 +385,16 @@ A section titled **"What this can't replay"** in the README. Being precise about
 - **C-extension nondeterminism.** Anything reading the clock or entropy below the Python layer is invisible.
 - **Code drift.** If the agent's logic changed materially since recording, replay will `TapeMiss` — by design.
 - **Non-`httpx` network stacks.** `aiohttp` and raw sockets aren't intercepted in v1.
+  *(Resolved 2026-08-19, M9: assessed and deliberately not implemented. aiohttp
+  has no public transport seam — recording means patching the private
+  `ClientSession._request`, and replay means fabricating a `ClientResponse` over
+  aiohttp's private connection contract, which was prototyped and costs two fake
+  objects and eight private attributes per release. No provider reeltime targets
+  is built on it. What M9 did add is a **guard**: an aiohttp request during a
+  replay now raises instead of silently reaching the network, and a recording
+  warns once. `boto3`/Bedrock is on `urllib3` and is the largest remaining gap;
+  WebSockets and gRPC have no request/response boundary to sit under. See
+  `STATUS.md`, "The framework audit".)*
 
 ---
 
