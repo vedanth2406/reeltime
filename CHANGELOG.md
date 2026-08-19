@@ -47,6 +47,17 @@ All notable changes to this project are documented here. This project follows
   without one, and a test that fails if a field is missing from either
   documentation table. `tests/test_patch_effects.py`.
 
+- **`tape doctor <command>`** (M7) runs a command more than once and reports
+  what is actually nondeterministic about it: each boundary where two runs got
+  different answers, the line of the user's code that crossed it, evidence,
+  and what to do about it. A finding is a call site rather than an event, so an
+  agent that reads the clock forty times produces one line instead of forty.
+  A *path split* — where two runs stop making the same calls at all — is
+  reported separately, because everything after it is incomparable rather than
+  divergent. `--runs N` looks harder, `--json` emits the report as data, and
+  `--fail-on-findings` exits 1 so it can be a CI gate. It needs no replay and
+  no prior traces, which makes it the first thing a new user can run.
+
 ### Fixed
 
 - **`--patch http.url` rewrote nothing.** It fell through to the generic

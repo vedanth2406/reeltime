@@ -14,37 +14,57 @@ release runbook is [`RELEASE.md`](RELEASE.md).
 
 | | |
 |---|---|
-| Milestones done | M1–M6 **and M5.5** (of 10) |
-| Published | `0.1.1`, `0.2.0` on PyPI. **`0.3.0` is built, checked, and on TestPyPI — the real upload has not been run** |
-| In the tree | `0.3.0` + M5.5 (the MCP adapter), unreleased |
-| Tests | 552 passing, 6 deselected (the wheel gate), 94% on `core/`, 100% on `core/mcp.py` |
+| Milestones done | M1–M7 (of 10), including M5.5 |
+| Published | `0.1.1`, `0.2.0`, `0.3.0` on PyPI. **`0.3.1` is built and on TestPyPI — the real upload has not been run** |
+| In the tree | M5.5 + M7 + the patch-field work, unreleased → **`0.4.0` next** |
+| Tests | 622 passing, 6 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
-| Git | **5 commits unpushed** (`git push` before anything else) |
-| Tags | `v0.1.1`, `v0.2.0` |
+| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0` (**see the warning below**) |
+| Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged |
 
-Next, in order: **finish publishing 0.3.0** (see below), then **M7 (`tape
-doctor`)**. M5.5 is done.
+Next: **finish publishing 0.3.1** (below), then **M8 (LangChain adapter)**.
 
-### Finishing the 0.3.0 release
+### ⚠ The `v0.3.0` tag does not match what is on PyPI
 
-Everything up to the real upload is done: version bumped in both files, the
-CHANGELOG heading moved, `dist/` rebuilt from the released tree, `twine check
---strict` passed, TestPyPI uploaded and installed from, and the whole product
-verified out of that install. What is left:
+`v0.3.0` points at `f59d455`, the **M5.5 commit**, which landed after the 0.3.0
+artifact was built. The published 0.3.0 sdist and wheel were built from
+`6b32363` and contain no MCP code at all — anyone who diffs the tag against
+`pip download reeltime==0.3.0` finds roughly 2000 lines that are not in the
+release.
+
+Either move it — `git tag -f -a v0.3.0 6b32363 && git push -f origin v0.3.0` —
+or leave it and say so in the GitHub release notes. Moving a published tag is
+mildly antisocial; leaving a tag that lies about a release is worse. Either
+way: **do not tag from a commit you did not build from.**
+
+### Finishing the 0.3.1 release
+
+0.3.1 is the `--only` fix and nothing else. It was branched from `6b32363`, the
+0.3.0 *release commit*, precisely because the tag points elsewhere. Built,
+`twine check --strict` passed, uploaded to TestPyPI, installed from there, and
+the fix verified in the installed artifact. What is left:
 
 ```bash
-python -m twine upload dist/*
-git push && git tag -a v0.3.0 -m "reeltime 0.3.0" && git push origin v0.3.0
-gh release create v0.3.0 --title "reeltime 0.3.0" --notes-from-tag
+git checkout hotfix/0.3.1
+python -m twine upload dist/*          # dist/ currently holds 0.3.1
+git push origin hotfix/0.3.1
+git tag -a v0.3.1 hotfix/0.3.1 -m "reeltime 0.3.1" && git push origin v0.3.1
+gh release create v0.3.1 --title "reeltime 0.3.1" --notes-from-tag
+git checkout main
 ```
 
-Check <https://test.pypi.org/project/reeltime/0.3.0/> in a browser first — the
+Check <https://test.pypi.org/project/reeltime/0.3.1/> in a browser first — the
 GIF and the tables. TestPyPI serves a bot challenge to `curl`, so that check
 cannot be scripted, and PyPI renders a README exactly once.
 
-**`dist/` is the 0.3.0 tree, not the current tree.** M5.5 landed after the
-build. Do not rebuild before uploading, or the artifact stops matching what was
-verified on TestPyPI; M5.5 ships in 0.4.0.
+**Do not merge `hotfix/0.3.1` into `main`.** The code fix is already on main as
+part of M5.5; only the version bump and a changelog heading differ, and merging
+would drag `main`'s version backwards. `main`'s CHANGELOG already records the
+0.3.1 release.
+
+**`dist/` holds the 0.3.1 artifacts.** Rebuilding from `main` would produce a
+0.3.0-with-everything, which is not a thing that should exist. Build 0.4.0 only
+after bumping the version on `main`.
 
 ---
 
@@ -59,8 +79,9 @@ verified on TestPyPI; M5.5 ships in 0.4.0.
 | **5** | `tape fork <run> --at N`, the `--patch` grammar, `--edit`, lineage (`forked_from` / `fork_at`, shown in `tape ls`), **v0.2.0 released** |
 | **6** | `tape diff <a> <b>` — signature alignment, divergence-point reporting, `--only`, `--json` |
 | **5.5** | MCP adapter: `mcp` events, `tape.mcp.connect` over stdio and HTTP/SSE, `tape.mcp.wrap`, discovery recording, readable `tape show`, tool-set reporting in `tape diff`, `--patch mcp.<tool>.result=`, a mock-server example |
+| **7** | `tape doctor` — run a command N times, report each boundary where the runs disagreed with its call site and a suggestion, plus the path split. `--runs`, `--json`, `--fail-on-findings` |
 
-CLI verbs today: `run`, `replay`, `fork`, `diff`, `reindex`, `ls`, `show`.
+CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `show`.
 
 ## Releases
 
@@ -70,9 +91,12 @@ CLI verbs today: `run`, `replay`, `fork`, `diff`, `reindex`, `ls`, `show`.
   **Do not yank**: it carries the path-normalisation bug below, and the
   CHANGELOG entry documents it.
 - **0.2.0** — fork and patch, plus the `resolve()` fix.
-- **0.3.0 — built and on TestPyPI, not yet on PyPI.** `tape diff` and the
-  wheel-install CI gate. See "Finishing the 0.3.0 release" above.
-- **0.4.0 — pending.** `[Unreleased]` holds M5.5, the MCP adapter.
+- **0.3.0** — `tape diff` and the wheel-install CI gate. Note the tag warning
+  above: the tag does not point at what was published.
+- **0.3.1 — built and on TestPyPI, not yet on PyPI.** The `--only` fix, off a
+  branch from the 0.3.0 release commit. See "Finishing the 0.3.1 release".
+- **0.4.0 — pending.** `[Unreleased]` holds M5.5 (the MCP adapter), M7
+  (`tape doctor`), and the patch-grammar work.
 
 `.pypirc` is configured for both indexes, so no token handling is needed.
 TestPyPI's token was revoked once mid-project after being pasted into a chat; if
@@ -241,6 +265,28 @@ and the bootstrap directory off `PYTHONPATH`. The SDK's own default happens to
 pass only a six-name allowlist, but a caller passing `env=os.environ` to get one
 variable through would hand over all of them.
 
+**A doctor finding is a call site, not an event.** An agent in a loop reads the
+clock forty times, and forty findings bury the one that matters. Findings are
+grouped by `(site, kind, name)` and counted; the report is as long as the number
+of distinct *places* a run is nondeterministic, which is the number a user can
+act on.
+
+**Doctor treats an unlike pairing as a split, not a source.** `tracediff.align`
+deliberately pairs events with different signatures at the same position, so a
+diff can show what replaced what. Reading that pairing as "this boundary
+answered differently" makes doctor report `path_a` returning `"b"` — a finding
+pointing at code that is behaving perfectly. `analyse` compares signatures and
+calls it a path split instead. There is a test named after this.
+
+**Doctor compares results, never requests.** A prompt that differs between two
+runs is a *consequence* of some earlier source, not a source, and reporting it
+as one sends the user to the wrong line. Request differences are counted as
+`propagated` — how far the real source spread — and nothing more.
+
+**Doctor says what it will cost before it does it.** It runs the agent N times,
+for real, with real calls. That warning goes to stderr before the first run
+starts, not in the report afterwards.
+
 **Traces survive a crash.** Every event is flushed as it is written; a missing
 footer line is exactly how you know a run did not exit cleanly.
 
@@ -303,6 +349,7 @@ tape replay last               # offline, free
 tape show last 1 --context     # what the model actually read
 tape fork last --at 1 --patch 'llm.system+="Ask first."'
 tape diff <a> <b>              # where two runs stopped being the same run
+tape doctor python agent.py    # what is actually nondeterministic here
 ```
 
 ```python
@@ -318,10 +365,10 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | M | Scope | Status |
 |---|---|---|
 | 1–6 | see above | ✅ |
-| — | release 0.3.0 | built, on TestPyPI, **PyPI upload outstanding** |
+| — | release 0.3.1 | built, on TestPyPI, **PyPI upload outstanding** |
 | 5.5 | **MCP adapter** | ✅ |
-| 7 | `tape doctor` — run twice, report actual nondeterminism sources | **next** |
-| 8 | LangChain callback adapter | |
+| 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
+| 8 | LangChain callback adapter | **next** |
 | 9 | Overhead benchmarks, docs site → v1.0 | |
 | 10 | Web UI | |
 

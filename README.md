@@ -88,6 +88,10 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
   fields — tool discovery included, so a server that changed what it offers
   shows up as a tool set change rather than as a mystery divergence. Replay
   never starts the server. Nothing else records MCP at all.
+- **`tape doctor` names what is actually nondeterministic about your agent**,
+  with call sites and what to do about each one. It runs the command twice and
+  compares, so the answer is measured rather than guessed — and it is useful
+  before you have replayed anything.
 - **Fork a run from any step, with the fix applied.** `tape fork <run> --at 13
   --patch 'llm.system+="Ask first."'` replays the first 13 events — free and
   identical — then goes live from there. Testing a prompt change costs one
@@ -117,6 +121,7 @@ tape run python agent.py     # records; your code is untouched
 tape ls                      # what you have recorded
 tape replay <run>            # re-run it offline, free
 tape show <run> 14 --context # what the model actually read at step 14
+tape doctor python agent.py  # why is this run not reproducible?
 ```
 
 `tape run` needs no import in your code — it injects a `sitecustomize` on
@@ -435,6 +440,64 @@ mock server with no credentials and no network.
 before this adapter existed still lines up against one recorded since. `--only`
 is not folded: `--only mcp` means MCP events.
 
+## Doctor
+
+`tape doctor` answers a question you have before you have any traces: **what
+about this agent is actually nondeterministic?** It runs the command twice,
+compares the traces, and reports each boundary where the two runs got different
+answers — with the line of your code that crossed it.
+
+```console
+$ tape doctor python agent.py
+running `python agent.py` 2 times — real runs, real calls, real cost
+  run 1 of 2…
+  run 2 of 2…
+
+doctor  2 runs of the same command  (01M0C0S6TZ1VA0, 01M0C0S6ZRKEEH)
+
+~ 3 nondeterminism sources found
+
+  agent.py:88   llm               1 of 1 completion differed (gpt-4o-mini, temperature 0.7)
+                                  I will delete b.txt → Let me remove b.txt
+  tools.py:12   http              1 of 1 response differed
+                                  {"temp": 12} → {"temp": 15}
+  agent.py:34   time·datetime.now 1 of 1 read differed
+                                  2026-08-18T10:00:01 → 2026-08-18T10:04:55
+
+suggestions:
+  llm: set temperature=0 for the closest thing to a reproducible run — though
+       most providers still do not promise identical completions, which is the
+       reason replay exists
+  http: an upstream response changed between runs; stub it or pin the version
+        if the agent's behaviour depends on it
+  time·datetime.now: inject a clock instead of calling time.time() or
+                     datetime.now() in the agent, so a test can hold it still
+```
+
+**A finding is a call site, not an event.** An agent in a loop reads the clock
+forty times; forty findings would bury the one that matters, so they are
+grouped and counted.
+
+**A path split is reported separately.** Once two runs stop making the *same*
+calls, everything after is incomparable rather than different — so the step
+where they split gets its own line, naming what each run called instead:
+
+```console
+  ⋯ the runs stopped making the same calls at step 1
+     run 1 called tool·path_a at split.py:19; run 2 called tool·path_b at split.py:21
+     Everything after that is incomparable, not divergent.
+     Fix the sources above and the split usually goes with them.
+```
+
+`--runs N` looks harder (a source that shows up one time in three needs more
+than two runs to catch). `--json` gives the report as data. `--fail-on-findings`
+exits 1 when anything is found, which makes it a CI gate: *this agent is
+reproducible, and here is the check that says so.*
+
+The runs are kept, so `tape diff` and `tape show` work on them afterwards.
+Doctor is not free — it runs your agent for real, twice — and it says so before
+it starts.
+
 ## Why interception is at the transport layer
 
 On **2026-08-18** the OpenAI Python SDK (3.2.0) is built on `httpx2` 2.10, while
@@ -511,6 +574,7 @@ Being precise about the boundary is the point.
 | Keeps the trace when the run crashes | ✅ flushed per event | ✕ discards it | n/a | ✅ |
 | Ambient nondeterminism | recorded, per call site | *frozen* (seeded, pinned clock) | ✕ | ✕ |
 | Step controls (`--to`, `--step`) | ✅ | ✕ | ✕ | ✕ |
+| Reports what is actually nondeterministic | ✅ `tape doctor`, with call sites | ✕ | ✕ | ✕ |
 | pytest integration | ✕ | ✅ | ✅ | partial |
 | Hand-editable fixture files | JSONL + blobs | ✅ readable YAML | ✅ YAML | n/a |
 | Recorded exceptions re-raised | ✅ | ✅ | partial | n/a |
@@ -591,8 +655,8 @@ mock MCP server next to it.
 | 5 | `tape fork <run> --at N --patch …`, **v0.2.0** | ✅ |
 | 6 | `tape diff`, divergence-point reporting, **v0.3.0** | ✅ |
 | 5.5 | MCP adapter — `mcp` events, both transports, tool-set diff | ✅ |
-| 7 | `tape doctor` — find a run's nondeterminism sources | next |
-| 8 | LangChain callback adapter | |
+| 7 | `tape doctor` — find a run's nondeterminism sources | ✅ |
+| 8 | LangChain callback adapter | next |
 | 9 | Overhead benchmarks, docs site | v1.0 |
 | 10 | Web UI | |
 
@@ -607,7 +671,7 @@ of thing that changes an agent's behaviour invisibly. See
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 552 tests
+pytest                                  # 622 tests
 pytest --cov --cov-report=term-missing  # core/ is at 94%
 python examples/m3_replay_speed.py      # the benchmark above
 ```

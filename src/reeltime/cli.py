@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import __version__
-from .core import context, fmt, ids, paths, tracediff
+from .core import context, doctor, fmt, ids, paths, tracediff
 from .core import mcp as mcp_mod
 from .core.blobs import BlobStore
 from .core.fork import check_patches, missing_credentials
@@ -31,8 +31,10 @@ from .errors import TapeError
 #: Not yet built. Kept in step with the roadmap table in the README -- the two
 #: are the only places that promise anything, so they must not drift apart.
 #: Entries that are not subcommands say so in their name ("mcp adapter").
+#: Not yet built. Kept in step with the roadmap table in the README -- the two
+#: are the only places that promise anything, so they must not drift apart.
 PLANNED = (
-    ("doctor", "find a run's nondeterminism sources", "M7"),
+    ("langchain adapter", "record a LangChain agent's callbacks", "M8"),
 )
 
 
@@ -220,18 +222,17 @@ def _resolve_interpreter(command: List[str]) -> List[str]:
     return command
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    if not args.command:
-        sys.stderr.write("tape run: give me a command, e.g. tape run python agent.py\n")
-        return 2
+def _record_once(command: Sequence[str], tape_dir: Path, **env_extra: str):
+    """Record one run of ``command``. Returns ``(run_id, CompletedProcess)``.
 
-    tape_dir = _tape_dir(args)
-    paths.ensure_tape_dir(tape_dir)
+    Shared by ``tape run`` and ``tape doctor`` so that a doctored run is
+    recorded through exactly the path a normal one is -- a doctor that recorded
+    differently would be diagnosing its own harness.
+    """
     run_id = ids.new_run_id()
-
-    command = _resolve_interpreter(list(args.command))
+    resolved = _resolve_interpreter(list(command))
     bootstrap = str(Path(__file__).resolve().parent / "_bootstrap")
-    env = dict(os.environ)
+    env = dict(os.environ, **env_extra)
     env["REELTIME_AUTOINSTALL"] = "1"
     env["REELTIME_RUN_ID"] = run_id
     env["TAPE_DIR"] = str(tape_dir)
@@ -240,11 +241,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     # sitecustomize if they have one.
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = bootstrap + (os.pathsep + existing if existing else "")
+    return run_id, subprocess.run(resolved, env=env)
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    if not args.command:
+        sys.stderr.write("tape run: give me a command, e.g. tape run python agent.py\n")
+        return 2
+
+    tape_dir = _tape_dir(args)
+    paths.ensure_tape_dir(tape_dir)
 
     try:
-        completed = subprocess.run(command, env=env)
-    except FileNotFoundError:
-        sys.stderr.write("tape run: no such command: {}\n".format(command[0]))
+        run_id, completed = _record_once(list(args.command), tape_dir)
+    except FileNotFoundError as exc:
+        sys.stderr.write("tape run: no such command: {}\n".format(exc.filename))
         return 127
 
     trace_file = paths.trace_path(tape_dir, run_id)
@@ -503,6 +514,64 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+# -- tape doctor ---------------------------------------------------------
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    if not args.command:
+        sys.stderr.write(
+            "tape doctor: give me a command, e.g. tape doctor python agent.py\n")
+        return 2
+    if args.runs < 2:
+        raise TapeError(
+            "--runs must be at least 2; there is nothing to compare below that")
+
+    tape_dir = _tape_dir(args)
+    paths.ensure_tape_dir(tape_dir)
+
+    # Said before anything happens rather than after: this runs the agent for
+    # real, N times, and the second one costs what the first one did.
+    sys.stderr.write(
+        "running `{}` {} times — real runs, real calls, real cost\n".format(
+            " ".join(args.command), args.runs))
+
+    run_ids = []
+    for attempt in range(args.runs):
+        sys.stderr.write("  run {} of {}…\n".format(attempt + 1, args.runs))
+        try:
+            run_id, completed = _record_once(list(args.command), tape_dir)
+        except FileNotFoundError as exc:
+            sys.stderr.write("tape doctor: no such command: {}\n".format(exc.filename))
+            return 127
+        if not paths.trace_path(tape_dir, run_id).exists():
+            sys.stderr.write(
+                "tape doctor: run {} recorded nothing. Is reeltime installed in "
+                "the interpreter that ran the command?\n".format(attempt + 1))
+            return completed.returncode or 1
+        if completed.returncode != 0:
+            # Still worth analysing. A command that fails the same way twice is
+            # a different report from one that fails only sometimes, and the
+            # second is exactly what this command is for.
+            sys.stderr.write("  (exited {})\n".format(completed.returncode))
+        run_ids.append(run_id)
+
+    traces = [read_trace(paths.trace_path(tape_dir, r)) for r in run_ids]
+    report = doctor.analyse(traces)
+
+    sys.stderr.write("\n")
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        sys.stdout.write(doctor.render(report))
+        print()
+        print("the runs are kept: tape diff {} {}".format(
+            _short(run_ids[0]), _short(run_ids[1])))
+
+    if args.fail_on_findings and not report.clean:
+        return 1
+    return 0
+
+
 # -- tape reindex --------------------------------------------------------
 
 
@@ -719,6 +788,21 @@ def build_parser() -> argparse.ArgumentParser:
     diff_cmd.add_argument("--json", action="store_true",
                           help="machine-readable output")
     diff_cmd.set_defaults(func=cmd_diff)
+
+    doctor_cmd = sub.add_parser(
+        "doctor", help="run a command twice and report what is nondeterministic",
+        description="Records the same command more than once and compares the "
+                    "traces, so the report names actual sources of "
+                    "nondeterminism rather than possible ones.")
+    doctor_cmd.add_argument("command", nargs=argparse.REMAINDER,
+                            help="the command to run, e.g. python agent.py")
+    doctor_cmd.add_argument("--runs", type=int, default=2, metavar="N",
+                            help="how many times to run it (default 2)")
+    doctor_cmd.add_argument("--json", action="store_true",
+                            help="machine-readable output")
+    doctor_cmd.add_argument("--fail-on-findings", action="store_true",
+                            help="exit 1 when a source is found (for CI)")
+    doctor_cmd.set_defaults(func=cmd_doctor)
 
     reindex_cmd = sub.add_parser(
         "reindex", help="re-run the provider decoders over an existing run")
