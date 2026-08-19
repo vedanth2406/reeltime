@@ -6,7 +6,8 @@ already made for reasons.
 
 The build spec is [`tapedeck-spec.md`](tapedeck-spec.md); the competitor
 teardown that reshaped the roadmap is [`COMPETITIVE.md`](COMPETITIVE.md); the
-release runbook is [`RELEASE.md`](RELEASE.md).
+release checklist is [`RELEASING.md`](RELEASING.md) ([`RELEASE.md`](RELEASE.md)
+is the v0.1.1 first-publication runbook, kept as history).
 
 ---
 
@@ -24,18 +25,20 @@ release runbook is [`RELEASE.md`](RELEASE.md).
 
 Next: **finish publishing 0.3.1** (below), then **M8 (LangChain adapter)**.
 
-### ⚠ The `v0.3.0` tag does not match what is on PyPI
+### The `v0.3.0` tag drift — resolved
 
-`v0.3.0` points at `f59d455`, the **M5.5 commit**, which landed after the 0.3.0
-artifact was built. The published 0.3.0 sdist and wheel were built from
-`6b32363` and contain no MCP code at all — anyone who diffs the tag against
-`pip download reeltime==0.3.0` finds roughly 2000 lines that are not in the
-release.
+`v0.3.0` briefly pointed at `f59d455`, the M5.5 commit, which landed *after*
+the 0.3.0 artifact was built. It has been moved to `6b32363`, the commit the
+release was actually built from, and verified against what PyPI is serving:
 
-Either move it — `git tag -f -a v0.3.0 6b32363 && git push -f origin v0.3.0` —
-or leave it and say so in the GitHub release notes. Moving a published tag is
-mildly antisocial; leaving a tag that lies about a release is worse. Either
-way: **do not tag from a commit you did not build from.**
+```
+$ comm -3 <published sdist file list> <git ls-tree -r --name-only v0.3.0>
+PKG-INFO
+```
+
+`PKG-INFO` is generated at build time, so that is a clean match. [`RELEASING.md`](RELEASING.md)
+exists because this was not written down — the rule is **build from the commit
+you tag, and check the tag against the artifact before announcing it.**
 
 ### Finishing the 0.3.1 release
 

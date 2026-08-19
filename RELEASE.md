@@ -1,4 +1,9 @@
-# Releasing reeltime
+# Releasing reeltime — the v0.1.1 first-publication runbook
+
+> **For any release after the first, follow [`RELEASING.md`](RELEASING.md).**
+> This file is kept for the one-time setup it records — claiming the name,
+> creating the repo, acquiring tokens, generating the GIF — and for *why* those
+> steps had to happen in that order. It is history, not a checklist.
 
 Runbook for v0.1.1. **The order matters** — step 4 explains why.
 

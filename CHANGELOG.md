@@ -3,7 +3,10 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — 2026-08-18
+
+Two milestones and a grammar audit. `tape doctor` is the headline: it is the
+first thing in this project that is useful before you have recorded anything.
 
 ### Added
 

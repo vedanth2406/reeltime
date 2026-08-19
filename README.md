@@ -2,7 +2,8 @@
 
 **A deterministic record/replay debugger for LLM agents.** Record a run once,
 then replay it offline, instantly, for free — and see the exact bytes the model
-received.
+received. Or run `tape doctor` and find out what makes your agent
+irreproducible in the first place, without recording anything.
 
 [![PyPI](https://img.shields.io/pypi/v/reeltime.svg)](https://pypi.org/project/reeltime/)
 [![Python](https://img.shields.io/pypi/pyversions/reeltime.svg)](https://pypi.org/project/reeltime/)
@@ -65,6 +66,40 @@ and replay only saves about a second. The ~80× figure below is measured on
 
 ---
 
+## Start here: what is actually nondeterministic about your agent?
+
+You do not need a trace, a replay, or any change to your code to get value out
+of this. One command runs your agent twice and tells you which boundaries
+disagreed, on which lines, and what to do about each one:
+
+```console
+$ tape doctor python agent.py
+~ 3 nondeterminism sources found
+
+  agent.py:88   llm               1 of 1 completion differed (gpt-4o-mini, temperature 0.7)
+                                  I will delete b.txt → Let me remove b.txt
+  tools.py:12   http              1 of 1 response differed
+                                  {"temp": 12} → {"temp": 15}
+  agent.py:34   time·datetime.now 1 of 1 read differed
+                                  2026-08-18T10:00:01 → 2026-08-18T10:04:55
+
+suggestions:
+  llm: set temperature=0 for the closest thing to a reproducible run — though
+       most providers still do not promise identical completions, which is the
+       reason replay exists
+  http: an upstream response changed between runs; stub it or pin the version
+        if the agent's behaviour depends on it
+  time·datetime.now: inject a clock instead of calling time.time() or
+                     datetime.now() in the agent, so a test can hold it still
+```
+
+`--fail-on-findings` exits 1 when anything is found, so the same command is a
+CI gate: **this agent is reproducible, and here is the check that says so.**
+[Full details below](#doctor).
+
+That is the standalone half. The rest of this page is what you get once you
+start recording.
+
 ## The problem
 
 Your agent failed at step 14. You re-ran it, and now it fails at step 11.
@@ -72,6 +107,10 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
 
 ## What this does about it
 
+- **`tape doctor` measures your agent's nondeterminism instead of guessing at
+  it**, naming each source with the line of your code that produced it. It
+  needs no traces and no replay, and `--fail-on-findings` turns it into a CI
+  gate. See [above](#start-here-what-is-actually-nondeterministic-about-your-agent).
 - **Replay is instant, offline, and free.** $0.00 and zero network calls —
   ~80× faster on an 8-turn agent paying 400 ms per call ([the
   benchmark](examples/m3_replay_speed.py)), and the ratio grows with the
@@ -88,10 +127,6 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
   fields — tool discovery included, so a server that changed what it offers
   shows up as a tool set change rather than as a mystery divergence. Replay
   never starts the server. Nothing else records MCP at all.
-- **`tape doctor` names what is actually nondeterministic about your agent**,
-  with call sites and what to do about each one. It runs the command twice and
-  compares, so the answer is measured rather than guessed — and it is useful
-  before you have replayed anything.
 - **Fork a run from any step, with the fix applied.** `tape fork <run> --at 13
   --patch 'llm.system+="Ask first."'` replays the first 13 events — free and
   identical — then goes live from there. Testing a prompt change costs one

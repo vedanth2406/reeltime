@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from . import mcp
 from .core.spans import span
