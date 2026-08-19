@@ -34,7 +34,7 @@ from .errors import TapeError
 #: Not yet built. Kept in step with the roadmap table in the README -- the two
 #: are the only places that promise anything, so they must not drift apart.
 PLANNED = (
-    ("langchain adapter", "record a LangChain agent's callbacks", "M8"),
+    ("benchmarks + docs site", "measure overhead, publish docs, cut v1.0", "M9"),
 )
 
 

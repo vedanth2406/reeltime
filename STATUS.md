@@ -1,13 +1,12 @@
 # Status
 
-Handoff notes, current as of **2026-08-18**. Written so a session starting cold
+Handoff notes, current as of **2026-08-19**. Written so a session starting cold
 can pick up without re-deriving anything or re-litigating decisions that were
 already made for reasons.
 
 The build spec is [`tapedeck-spec.md`](tapedeck-spec.md); the competitor
 teardown that reshaped the roadmap is [`COMPETITIVE.md`](COMPETITIVE.md); the
-release checklist is [`RELEASING.md`](RELEASING.md) ([`RELEASE.md`](RELEASE.md)
-is the v0.1.1 first-publication runbook, kept as history).
+release checklist is [`RELEASING.md`](RELEASING.md).
 
 ---
 
@@ -15,59 +14,42 @@ is the v0.1.1 first-publication runbook, kept as history).
 
 | | |
 |---|---|
-| Milestones done | M1–M7 (of 10), including M5.5 |
-| Published | `0.1.1`, `0.2.0`, `0.3.0` on PyPI. **`0.3.1` is built and on TestPyPI — the real upload has not been run** |
-| In the tree | M5.5 + M7 + the patch-field work, unreleased → **`0.4.0` next** |
+| Milestones done | M1–M7 **including M5.5**; M8 skipped for now |
+| Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0` — all on PyPI |
+| In the tree | `0.4.0`, clean. Nothing unreleased, nothing unpushed |
 | Tests | 622 passing, 6 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
-| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0` (**see the warning below**) |
-| Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged |
+| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0` — the last three verified against their artifacts |
+| Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
-Next: **finish publishing 0.3.1** (below), then **M8 (LangChain adapter)**.
+**Next: M9 — overhead benchmarks and a docs site, the last thing before v1.0.**
+M8 (the LangChain callback adapter) is deliberately skipped rather than done;
+see the roadmap at the bottom.
 
-### The `v0.3.0` tag drift — resolved
+There is no outstanding release work. `0.4.0` is published, tagged at the
+commit it was built from, and verified.
 
-`v0.3.0` briefly pointed at `f59d455`, the M5.5 commit, which landed *after*
-the 0.3.0 artifact was built. It has been moved to `6b32363`, the commit the
-release was actually built from, and verified against what PyPI is serving:
+### The `v0.3.0` tag drift — resolved, and why `RELEASING.md` exists
+
+`v0.3.0` was briefly tagged at `f59d455`, the M5.5 commit, which landed *after*
+the 0.3.0 artifact had been built. The published 0.3.0 sdist contains no MCP
+code; the tag claimed ~2000 lines the release did not have. Nothing caught it,
+because the release sequence had never been written down.
+
+The tag now points at `6b32363`, the commit the artifact was built from. All
+three releases since have been checked the same way — the published sdist file
+list against `git ls-tree` of the tag:
 
 ```
-$ comm -3 <published sdist file list> <git ls-tree -r --name-only v0.3.0>
-PKG-INFO
+v0.3.0  →  PKG-INFO
+v0.3.1  →  PKG-INFO
+v0.4.0  →  PKG-INFO
 ```
 
-`PKG-INFO` is generated at build time, so that is a clean match. [`RELEASING.md`](RELEASING.md)
-exists because this was not written down — the rule is **build from the commit
-you tag, and check the tag against the artifact before announcing it.**
-
-### Finishing the 0.3.1 release
-
-0.3.1 is the `--only` fix and nothing else. It was branched from `6b32363`, the
-0.3.0 *release commit*, precisely because the tag points elsewhere. Built,
-`twine check --strict` passed, uploaded to TestPyPI, installed from there, and
-the fix verified in the installed artifact. What is left:
-
-```bash
-git checkout hotfix/0.3.1
-python -m twine upload dist/*          # dist/ currently holds 0.3.1
-git push origin hotfix/0.3.1
-git tag -a v0.3.1 hotfix/0.3.1 -m "reeltime 0.3.1" && git push origin v0.3.1
-gh release create v0.3.1 --title "reeltime 0.3.1" --notes-from-tag
-git checkout main
-```
-
-Check <https://test.pypi.org/project/reeltime/0.3.1/> in a browser first — the
-GIF and the tables. TestPyPI serves a bot challenge to `curl`, so that check
-cannot be scripted, and PyPI renders a README exactly once.
-
-**Do not merge `hotfix/0.3.1` into `main`.** The code fix is already on main as
-part of M5.5; only the version bump and a changelog heading differ, and merging
-would drag `main`'s version backwards. `main`'s CHANGELOG already records the
-0.3.1 release.
-
-**`dist/` holds the 0.3.1 artifacts.** Rebuilding from `main` would produce a
-0.3.0-with-everything, which is not a thing that should exist. Build 0.4.0 only
-after bumping the version on `main`.
+`PKG-INFO` is generated at build time, so that single line is a clean match.
+The check itself is step 6 of [`RELEASING.md`](RELEASING.md). **Run it after
+every release.** The rule it enforces: build from the commit you tag, and prove
+the tag matches the artifact before announcing it.
 
 ---
 
@@ -83,6 +65,7 @@ after bumping the version on `main`.
 | **6** | `tape diff <a> <b>` — signature alignment, divergence-point reporting, `--only`, `--json` |
 | **5.5** | MCP adapter: `mcp` events, `tape.mcp.connect` over stdio and HTTP/SSE, `tape.mcp.wrap`, discovery recording, readable `tape show`, tool-set reporting in `tape diff`, `--patch mcp.<tool>.result=`, a mock-server example |
 | **7** | `tape doctor` — run a command N times, report each boundary where the runs disagreed with its call site and a suggestion, plus the path split. `--runs`, `--json`, `--fail-on-findings` |
+| **—** | The patch-grammar audit: `tool.args` and `mcp.args` implemented, `http.url` fixed, `+=`/`~=` on a JSON document refused at parse time, the fork footer written to disk, and `tests/test_patch_effects.py` |
 
 CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `show`.
 
@@ -94,16 +77,51 @@ CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `sh
   **Do not yank**: it carries the path-normalisation bug below, and the
   CHANGELOG entry documents it.
 - **0.2.0** — fork and patch, plus the `resolve()` fix.
-- **0.3.0** — `tape diff` and the wheel-install CI gate. Note the tag warning
-  above: the tag does not point at what was published.
-- **0.3.1 — built and on TestPyPI, not yet on PyPI.** The `--only` fix, off a
-  branch from the 0.3.0 release commit. See "Finishing the 0.3.1 release".
-- **0.4.0 — pending.** `[Unreleased]` holds M5.5 (the MCP adapter), M7
-  (`tape doctor`), and the patch-grammar work.
+- **0.3.0** — `tape diff` and the wheel-install CI gate. Its tag was wrong for
+  a few hours; see the tag-drift section above.
+- **0.3.1** — the `tape diff --only` fix alone, released off a branch from the
+  0.3.0 release commit because `main` had already moved on to M5.5. The pattern
+  is written up in [`RELEASING.md`](RELEASING.md).
+- **0.4.0** — M5.5 (MCP sessions), M7 (`tape doctor`), the patch-grammar audit,
+  and the fork-footer fix. `tape doctor` leads the README: it is the first thing
+  in the project that is useful before you have recorded anything.
 
-`.pypirc` is configured for both indexes, so no token handling is needed.
-TestPyPI's token was revoked once mid-project after being pasted into a chat; if
-an upload there returns **403**, that is the first thing to check.
+
+---
+
+## The patch-grammar audit (0.4.0)
+
+`--patch tool.<name>.args` was declared in `REQUEST_FIELDS` from 0.2.0 and read
+by **nothing**. It parsed, `check_patches` accepted it, the fork ran, the footer
+reported it as applied, and the tool was called with its original arguments.
+That is worse than an unsupported field: a patch that parses and silently does
+nothing sends you looking for the bug in your own agent.
+
+Auditing the rest of the table found two more of the same shape and one nearby:
+
+| Field | Was | Now |
+|---|---|---|
+| `tool.args` | parsed, never read | rewrites the call; the event records the call that was actually made |
+| `mcp.args` | did not exist | same, for an MCP tool |
+| `http.url` | fell through to the body path and wrote a `url` **key into the JSON body** | rewrites the outgoing request URL |
+| `http.body` / `.args` with `+=` or `~=` | accepted, then silently ignored — appending to a JSON document is undefined | refused when the expression is parsed, before the fork runs |
+| fork footer | `forked_from` / `fork_at` / `patched` were added to the footer dict *after* it had been written | passed into `recorder.close(extra=…)` so they reach disk |
+
+**The guard against a recurrence is [`tests/test_patch_effects.py`](tests/test_patch_effects.py).**
+It is a table, not a list of tests: one case per `(kind, field)`, each forking a
+real run and asserting an effect only observable if the patch reached its
+boundary. Three meta-tests keep it honest —
+
+- `test_every_declared_field_has_a_case` fails if a field is added to the
+  grammar without a case;
+- `test_every_named_case_exists` fails if a rename orphans an entry;
+- `test_every_declared_field_is_documented` fails if a field is missing from the
+  `patch.py` table or the README table. It failed on first run, which is how the
+  README rows got written.
+
+`patch.declared_fields()` is what those read. **If you add a patch field, add it
+there, implement it, document it in both tables, and add a case.** All four, or
+the suite tells you which one you skipped.
 
 ---
 
@@ -311,13 +329,14 @@ model yields `null`, never a guess.
 cd ~/newproject/reeltime
 pip install -e ".[dev]"
 
-pytest                                   # 489 tests; the wheel gate is deselected
-pytest --cov --cov-report=term-missing   # core/ is at 94%; the bar is 85%
+pytest                                   # 622 tests; the wheel gate is deselected
+pytest --cov --cov-report=term-missing   # core/ is at 95%; the bar is 85%
 pytest -m wheel                          # the symlinked wheel-install gate (slow)
 pytest -m wheel -v                       # what CI runs
 
 python examples/m3_replay_speed.py       # the ~80× number the README quotes
 python examples/truncation_bug.py        # the demo; no API key needed
+tape run python examples/mcp_agent.py    # the MCP example; no API key either
 vhs demo.tape                            # re-record demo.gif (needs `brew install vhs`)
 ```
 
@@ -327,21 +346,20 @@ every event report as drifted.
 
 ### Build and publish
 
-```bash
-rm -rf dist build && python -m build
-python -m twine check --strict dist/*
-python -m twine upload --repository testpypi dist/*   # always first
-python -m twine upload dist/*
-git push && git tag -a v0.3.0 -m "reeltime 0.3.0" && git push origin v0.3.0
-```
+**Follow [`RELEASING.md`](RELEASING.md).** It is short, it is the sequence that
+has actually worked, and the two things that bite most are in it in full:
 
-Two things that bite, both in [`RELEASE.md`](RELEASE.md) in full:
-
+- **Commit before you build, and tag the commit you built from.** The artifact
+  comes from the working tree, so anything uncommitted ships without being in
+  the tag. This is what went wrong with `v0.3.0`.
 - **Rebuild after any README edit.** PyPI renders the README once at upload and
-  never again, so a stale `dist/` ships a description you did not check.
-- The GIF is referenced by absolute `raw.githubusercontent.com` URL. It must
-  resolve *before* the first upload of a version, or fixing it costs a version
-  bump.
+  never again, so a stale `dist/` ships a description nobody checked.
+
+`.pypirc` is configured for both indexes, so no token handling is needed.
+TestPyPI's token was revoked once mid-project after being pasted into a chat; if
+an upload there returns **403**, that is the first thing to check. TestPyPI also
+takes a few seconds to index a fresh upload, and reports the gap as
+"unsatisfiable requirements" — retry before believing it.
 
 ### Try it
 
@@ -368,14 +386,24 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | M | Scope | Status |
 |---|---|---|
 | 1–6 | see above | ✅ |
-| — | release 0.3.1 | built, on TestPyPI, **PyPI upload outstanding** |
 | 5.5 | **MCP adapter** | ✅ |
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
-| 8 | LangChain callback adapter | **next** |
-| 9 | Overhead benchmarks, docs site → v1.0 | |
+| 8 | LangChain callback adapter | **skipped for now** |
+| 9 | Overhead benchmarks, docs site → v1.0 | **next** |
 | 10 | Web UI | |
+
+**M8 is skipped, not done.** The LangChain callback adapter was resequenced
+behind M9 deliberately: M9 is the last thing between here and v1.0, and the
+overhead numbers are what the README currently asserts without measuring at this
+scale. If M8 comes back, it comes back after v1.0 — nothing in M9 depends on it,
+and nothing shipped assumes it exists.
+
+M9, concretely, from spec §11: measure the recording overhead per boundary kind
+(the README claims ~2 ms per HTTP event and 20–30 µs per ambient read — those
+numbers predate M5.5 and M7 and should be re-measured, not re-quoted), publish a
+docs site, and cut v1.0.
 
 MCP was deliberately early, and it shipped: no record/replay tool captures MCP
 sessions, and AgentTape still publishes an `mcp` optional dependency with no
-code behind it. The web UI was moved last: it is the most expensive milestone
-and the least differentiating, since a competitor already ships a viewer.
+code behind it. The web UI stays last: it is the most expensive milestone and
+the least differentiating, since a competitor already ships a viewer.

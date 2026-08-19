@@ -1,8 +1,8 @@
 # Releasing
 
-The sequence that has actually worked, in order. [`RELEASE.md`](RELEASE.md) is
-the longer first-publication runbook from v0.1.1 — one-time setup, tokens, the
-GIF. This file is the one to follow for every release after that.
+The sequence that has actually worked, in order. Steps 0–7 are every release;
+the one-time setup that only mattered for the first publication is folded in at
+the end, under [First publication](#first-publication-done-once).
 
 **The rule this file exists for:** build from the commit you tag, and check the
 tag against the published artifact before you announce it. `v0.3.0` was tagged
@@ -25,6 +25,13 @@ pytest --cov --cov-report=term           # core/ must stay above 85%
   confidently wrong number in someone's cost report.
 - Decide the version. It is consumed forever once uploaded — on TestPyPI too,
   which is why `0.1.0` can never be reused there.
+- `CHANGELOG.md` is the source of truth for release notes. Write it before
+  tagging, not after.
+- If the demo GIF was re-recorded, check its numbers still agree with the
+  README. `examples/truncation_bug.py` runs two events against an embedded mock
+  and reports ~2×; the README's ~80× comes from `examples/m3_replay_speed.py`
+  at 400 ms per call. Both are true, they sit next to each other in the GIF, and
+  they made each other look unreliable once already.
 
 ## 1. Prepare the tree
 
@@ -104,6 +111,11 @@ cd $(mktemp -d)
 
 `--index-strategy unsafe-best-match` is required: without it `uv` resolves
 `reeltime` from whichever index answers first and refuses the TestPyPI version.
+
+**The first install attempt usually fails.** TestPyPI's index takes a few
+seconds to list a version that has just been uploaded, and the error says
+"unsatisfiable requirements" rather than "not there yet". Retry before believing
+it — this happened on both `0.3.1` and `0.4.0`.
 
 If the name is taken on TestPyPI, rename in `pyproject.toml` for this step only
 and revert immediately. **Never leave a changed name in the tree.**
@@ -189,6 +201,59 @@ This is how `0.3.1` shipped: `main` held the MCP adapter, the fix belonged to
 
 - **Broken README or GIF:** there is no way to re-render an existing release.
   Fix it and bump.
-- **Broken code:** upload the fix as the next patch version, then yank the bad
-  one from the PyPI web UI. Yanking hides it from resolvers without deleting
-  it, so anyone who pinned it still resolves.
+- **Broken code:** upload the fix as the next patch version, then
+  `pip download reeltime==<bad>` to confirm what actually shipped, and yank the
+  bad one from the PyPI web UI. Yanking hides it from resolvers without
+  deleting it, so anyone who pinned it still resolves.
+- **Wrong name entirely:** the name is claimed for good. Pick another and leave
+  a final release under the old one pointing at it.
+
+---
+
+## First publication (done once)
+
+Kept because the *ordering* here is not obvious and cost a version number to
+learn. None of it is needed again unless the project is renamed or re-homed.
+
+**Credentials.** `.pypirc` is configured for both indexes, so nothing needs
+handling per release. PyPI and TestPyPI are separate accounts with separate
+tokens. The first upload to a project that does not exist yet needs an
+account-scoped token; swap it for a project-scoped one afterwards. To keep a
+token out of shell history: `read -rs TWINE_PASSWORD && export TWINE_PASSWORD`
+with `TWINE_USERNAME=__token__`. A **403** from TestPyPI usually means the token
+was revoked — ours was, once, after being pasted into a chat.
+
+**The GitHub repo comes before the GIF, and the GIF before any upload.** Three
+steps that must happen in this order:
+
+1. Push to GitHub with a fenced terminal transcript in the README instead of an
+   image. A relative image path does not render on PyPI, and an absolute
+   `raw.githubusercontent.com` URL 404s until the repo exists.
+
+   ```bash
+   gh repo create reeltime --public --source=. --remote=origin \
+     --description "Deterministic record/replay debugger for LLM agents" --push
+   ```
+
+2. Record the GIF and push it. `vhs demo.tape` from the repo root drives
+   `examples/truncation_bug.py`, which embeds a mock provider — so it costs
+   nothing, comes out the same for everyone, and records into a temp directory
+   rather than an existing `.tape/`. Watch it once before committing, then
+   confirm the raw URL resolves.
+
+3. Point the README at the absolute GIF URL and push. **Keep the transcript
+   underneath it** — it is what readers get when images are blocked, and it is
+   searchable, so someone googling a `TRUNCATED` line can land on the page.
+
+   Why all of this precedes the first upload: PyPI renders the README once, at
+   upload, and stores the result forever. A GIF URL that 404s at that moment
+   stays broken on the project page until a new version is uploaded. GitHub
+   re-renders on every view, so fixing it there is free.
+
+**If the name is taken on TestPyPI** (it is not moderated, so squatting is
+common), append a suffix in `pyproject.toml` for that step only — rebuild,
+upload, revert. Never leave a changed name in the tree.
+
+**Once the project page exists:** add the repo topics (`llm`, `agents`,
+`debugging`, `record-replay`, `openai`, `anthropic`, `python`), and set the
+GitHub description and website to the PyPI URL.
