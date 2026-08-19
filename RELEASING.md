@@ -1,6 +1,6 @@
 # Releasing
 
-The sequence that has actually worked, in order. Steps 0–7 are every release;
+The sequence that has actually worked, in order. Steps 0–8 are every release;
 the one-time setup that only mattered for the first publication is folded in at
 the end, under [First publication](#first-publication-done-once).
 
@@ -9,6 +9,12 @@ tag against the published artifact before you announce it. `v0.3.0` was tagged
 from a commit that landed *after* its artifact was built, so the tag carried
 ~2000 lines of code the release did not have. Nothing caught it, because none
 of this was written down.
+
+**The release ends at step 7, not at step 5.** The upload is the irreversible
+step and so it feels like the finish line; it is not. Step 7 exits non-zero
+until the published artifact, the tag, and the remote all agree — and it is the
+only step whose output you are required to read. Twice now an artifact has
+shipped without its tag following it.
 
 ---
 
@@ -130,42 +136,104 @@ Irreversible in the ways that matter: the version can never be reused, and the
 rendered README is frozen at this moment. Deleting a release does not free the
 version.
 
-## 6. Tag the commit you built from — and prove it
+## 6. Tag the commit you built from
 
 ```bash
 git push
-git tag -a vX.Y.Z -m "reeltime X.Y.Z" && git push origin vX.Y.Z
+git tag -a vX.Y.Z -m "reeltime X.Y.Z" <the-build-commit> && git push origin vX.Y.Z
 gh release create vX.Y.Z --title "reeltime X.Y.Z" --notes-from-tag
 ```
 
-Then verify the tag against what PyPI is actually serving. The only difference
-should be `PKG-INFO`, which the build generates:
+**Name the commit explicitly.** `git tag` without one tags `HEAD`, which is the
+same thing only for as long as nobody has committed since — and step 5 is the
+step where you are most likely to have been distracted.
+
+## 7. Close the release: run the check and read its verdict
+
+**A release is not finished when the upload succeeds. It is finished when this
+prints `RELEASE VERIFIED`.** Uploading is the irreversible part, so it feels
+like the end; the tag is what makes the artifact traceable afterwards, and it
+is the part with nothing forcing it to happen.
+
+This has now gone wrong twice, in both directions, which makes it a checklist
+gap rather than bad luck:
+
+- **`v0.3.0`** — the tag existed and pointed at the *wrong* commit, claiming
+  ~2000 lines the release did not contain.
+- **`v0.5.0`** — the artifact was correct and the tag simply never followed.
+  PyPI had 0.5.0; GitHub had no `v0.5.0` and the release commit was not even
+  pushed. The provenance of a published artifact lived in one working copy.
+
+Both would have been caught here, in seconds, by a step that fails instead of
+printing something for you to eyeball. So this one exits non-zero:
 
 ```bash
-python - <<'EOF' > /tmp/published.txt
-import json, urllib.request, tarfile, io, hashlib
-V = "X.Y.Z"
-d = json.load(urllib.request.urlopen(
-    "https://pypi.org/pypi/reeltime/{}/json".format(V)))
-sd = [u for u in d["urls"] if u["packagetype"] == "sdist"][0]
-raw = urllib.request.urlopen(sd["url"]).read()
-assert hashlib.sha256(raw).hexdigest() == sd["digests"]["sha256"]
-tf = tarfile.open(fileobj=io.BytesIO(raw))
-print("\n".join(sorted(n.split("/", 1)[1] for n in tf.getnames() if "/" in n)))
-EOF
+python - <<'EOF'
+import io, json, subprocess, sys, tarfile, urllib.request, hashlib
 
-git ls-tree -r --name-only vX.Y.Z | sort > /tmp/tagged.txt
-comm -3 /tmp/published.txt /tmp/tagged.txt     # expect: PKG-INFO, nothing else
+V = "X.Y.Z"                       # <- the version you just uploaded
+TAG = "v" + V
+
+meta = json.load(urllib.request.urlopen(
+    "https://pypi.org/pypi/reeltime/{}/json".format(V)))
+sdist = [u for u in meta["urls"] if u["packagetype"] == "sdist"][0]
+raw = urllib.request.urlopen(sdist["url"]).read()
+
+problems = []
+if hashlib.sha256(raw).hexdigest() != sdist["digests"]["sha256"]:
+    problems.append("the downloaded sdist does not match its own PyPI digest")
+
+published = sorted(n.split("/", 1)[1]
+                   for n in tarfile.open(fileobj=io.BytesIO(raw)).getnames()
+                   if "/" in n)
+
+
+def git(*args):
+    out = subprocess.run(("git",) + args, capture_output=True, text=True)
+    return None if out.returncode else out.stdout.strip()
+
+
+if git("rev-parse", TAG + "^{}") is None:
+    problems.append("{} does not exist locally".format(TAG))
+elif not git("ls-remote", "--tags", "origin", "refs/tags/" + TAG):
+    problems.append("{} exists locally but was never pushed".format(TAG))
+else:
+    tagged = sorted((git("ls-tree", "-r", "--name-only", TAG) or "").splitlines())
+    only_published = set(published) - set(tagged) - {"PKG-INFO"}
+    only_tagged = set(tagged) - set(published)
+    if only_published:
+        problems.append("in the sdist but not in {}: {}".format(
+            TAG, sorted(only_published)))
+    if only_tagged:
+        problems.append("in {} but not in the sdist: {}".format(
+            TAG, sorted(only_tagged)))
+    commit = git("rev-parse", TAG + "^{}")
+    if not git("branch", "-r", "--contains", commit):
+        problems.append(
+            "{} points at {}, which is on no remote branch — push it".format(
+                TAG, (commit or "?")[:12]))
+
+if problems:
+    print("RELEASE NOT VERIFIED")
+    for problem in problems:
+        print("  -", problem)
+    sys.exit(1)
+print("RELEASE VERIFIED: {} matches {} (PKG-INFO aside, which the build "
+      "generates)".format(V, TAG))
+EOF
 ```
 
-Anything else in that output means the tag and the release disagree. Move the
-tag to the commit you built from rather than leaving it wrong:
+If it fails because the tag is on the wrong commit, move it rather than leaving
+it wrong:
 
 ```bash
 git tag -f -a vX.Y.Z <the-build-commit> && git push -f origin vX.Y.Z
 ```
 
-## 7. After
+Then re-run the check until it prints `RELEASE VERIFIED`. **Do not announce a
+release you have not seen that line for.**
+
+## 8. After
 
 ```bash
 uv venv /tmp/rt-live && VIRTUAL_ENV=/tmp/rt-live uv pip install reeltime
