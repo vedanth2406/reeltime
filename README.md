@@ -852,8 +852,9 @@ provider.
 | 5.5 | MCP adapter — `mcp` events, both transports, tool-set diff | ✅ |
 | 7 | `tape doctor` — find a run's nondeterminism sources, **v0.4.0** | ✅ |
 | 9 | LangChain adapter — `chain` events, graph diff, the aiohttp guard, **v0.5.0** | ✅ |
-| 10 | `tape ui` — a local viewer | **next** |
-| 11 | Overhead benchmarks, docs site | → v1.0 |
+| 10 | `urllib3` interception — Bedrock/boto3 record and replay | **next** |
+| 11 | `tape ui` — a local viewer | |
+| 12 | Overhead benchmarks, docs site | → v1.0 |
 
 MCP shipped early on purpose: no other record/replay tool captures MCP sessions,
 and a server that exposes a different tool set between runs is exactly the kind

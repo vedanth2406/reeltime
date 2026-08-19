@@ -22,8 +22,10 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 | Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
-**Next: M10 — the web UI.** There is no M8; the slot was emptied by the
-resequencing, not skipped. The roadmap at the bottom says why.
+**Next: M10 — `urllib3` interception, closing the Bedrock/boto3 gap.** There is
+no M8; that slot was emptied by the resequencing, not skipped. The web UI moved
+from M10 to M11 to make room; the roadmap at the bottom says why, and why that
+one shuffled where M8 did not.
 
 There is no outstanding release work. `0.5.0` is published, tagged at the
 commit it was built from, and verified.
@@ -396,6 +398,34 @@ warns once. aiohttp is **not** added to the footer's `intercepted` list, because
 that list answers "why was my call not recorded?" and listing it would answer
 wrongly.
 
+**The M1 boundary rule keeps absorbing problems later milestones expected to
+have to solve, and that is an argument about the architecture worth recording.**
+Twice now a milestone has budgeted for a double-recording problem and found it
+already handled:
+
+- **M9** expected to have to stop a LangChain tool node and the HTTP call
+  inside it from both being recorded. It did not: `record()` and `consume()`
+  both return None inside `in_boundary()`, so the rule wrote the answer.
+- **M10** expected `requests`-on-`urllib3` to be the hard part, since a shim at
+  the connection-pool layer sits *underneath* the `requests` shim and both
+  would fire on one call. Measured before writing any code: inside a
+  `RequestsShim`-recorded call, `urlopen` is reached with `in_boundary()`
+  already true, so a urllib3 shim respecting the same rule records nothing
+  extra. One event, not two, for free.
+
+The rule is four lines of `threading.local` written in M1, before any of the
+things it now protects existed. What makes it keep paying is that it is stated
+in terms of *boundaries* rather than in terms of any particular library: "the
+outermost boundary is the one recorded" does not care whether the inner thing
+is httpx, urllib3, a LangChain callback, or something not written yet. A rule
+phrased as "do not double-record requests calls" would have needed rewriting at
+both milestones.
+
+The practical consequence for whoever adds the next interception point:
+**check whether the rule already covers your case before designing around it,
+and measure rather than reason.** Both times the answer was already yes, and
+both times it would have been easy to build a redundant mechanism instead.
+
 **A doctor finding is a call site, not an event.** An agent in a loop reads the
 clock forty times, and forty findings bury the one that matters. Findings are
 grouped by `(site, kind, name)` and counted; the report is as long as the number
@@ -569,8 +599,9 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | 5.5 | **MCP adapter** | ✅ |
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
 | 9 | LangChain adapter, remaining framework coverage | ✅ |
-| 10 | Web UI | **next** |
-| 11 | Overhead benchmarks, docs site → v1.0 | |
+| 10 | `urllib3` interception — Bedrock/boto3, streaming included | **next** |
+| 11 | Web UI | |
+| 12 | Overhead benchmarks, docs site → v1.0 | |
 
 **There is no M8.** The original spec §11 had M8 = web UI. The resequencing
 after the competitive analysis moved the web UI to M10, which emptied the slot;
@@ -578,16 +609,44 @@ nothing was deferred and nothing is missing. The number is simply vacant, and
 the row is left out rather than backfilled — closing the gap by renumbering is
 how it got mistaken for skipped work once already.
 
+### The M10 renumber (2026-08-19) — and why this one shuffled
+
+The web UI moved a second time, from M10 to M11, and benchmarks from M11 to
+M12, to put `urllib3` interception at M10. **This is a real renumber, unlike
+the M8 vacancy, and it was done deliberately rather than by leaving another
+hole.**
+
+The reason for the move: the M9 framework audit went looking for the largest
+remaining coverage gap and found Bedrock. `botocore` is built on `urllib3`,
+which sits below every shim reeltime has, so an agent on Bedrock records
+nothing at all — and unlike aiohttp, `urllib3` has a public, documented seam
+(`HTTPConnectionPool.urlopen`) and a response object with a public constructor.
+Closing a stack where the tool silently records nothing beats shipping a viewer
+for the runs it already records.
+
+The reason it shuffled rather than taking a new number: a second vacant slot
+would need its own paragraph of explanation forever, and one vacancy is already
+one more than anybody wants to think about. **M8 is still vacant and still must
+not be backfilled** — that gap is load-bearing history, this one would have
+been clutter.
+
+The published 0.5.0 README on PyPI says M10 is the web UI and always will:
+PyPI renders a description once, at upload, and freezes it. Not worth a version
+bump to correct, and noted here so nobody reads it as drift.
+
 M9 shipped the LangChain callback adapter and closed the framework question:
 see "The framework audit" above for what else was considered and why it was
-not built. It was the last adapter-shaped milestone.
+not built. It was the last *adapter*-shaped milestone; M10 is transport-shaped,
+which is a different job.
 
-M11 is what stands between here and v1.0: measure the recording overhead per
+M12 is what stands between here and v1.0: measure the recording overhead per
 boundary kind and publish a docs site. The README currently claims ~2 ms per
 HTTP event and 20–30 µs per ambient read — **those numbers predate M5.5 and M7
 and should be re-measured, not re-quoted.**
 
 MCP was deliberately early, and it shipped: no record/replay tool captures MCP
 sessions, and AgentTape still publishes an `mcp` optional dependency with no
-code behind it. The web UI stays late: it is the most expensive milestone and
-the least differentiating, since a competitor already ships a viewer.
+code behind it. The web UI stays late, and got later: it is the most expensive
+milestone and the least differentiating, since a competitor already ships a
+viewer — and a viewer for runs the tool cannot record is worth less than being
+able to record them.

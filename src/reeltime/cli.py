@@ -33,7 +33,8 @@ from .errors import TapeError
 #: are the only places that promise anything, so they must not drift apart.
 #: Entries that are not subcommands say so in their name ("mcp adapter").
 PLANNED = (
-    ("ui", "browse a run in a local viewer", "M10"),
+    ("urllib3 interception", "record boto3 and Bedrock calls", "M10"),
+    ("ui", "browse a run in a local viewer", "M11"),
 )
 
 
