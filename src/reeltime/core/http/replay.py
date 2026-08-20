@@ -31,19 +31,48 @@ def response_headers(res: Dict[str, Any]) -> List[Tuple[str, str]]:
 
 
 def recorded_error(event: Event, module: Any) -> Optional[BaseException]:
-    """The exception this event recorded, rebuilt from the client's own class."""
+    """The exception this event recorded, rebuilt from the client's own class.
+
+    **The class is the part that matters**, not the message. An agent that
+    catches ``urllib3.exceptions.HTTPError`` and retries has a code path the
+    recording went down, and a replay that raises something else takes a
+    different path -- a divergence with no network call in sight, which is the
+    quietest way for a replay to lie.
+
+    Which is exactly what happened: httpx's exceptions all take a single
+    message, but urllib3's take the connection or the pool as well
+    (``NewConnectionError(conn, message)``,
+    ``MaxRetryError(pool, url, reason)``). A one-argument construction raises
+    ``TypeError`` on those, and the fallback below turned a recorded
+    ``NewConnectionError`` into a ``RuntimeError`` that no ``except`` clause in
+    the agent was written for.
+
+    So a constructor that refuses its arguments is not the end of it: the class
+    is instantiated without running ``__init__`` and given the message
+    directly. The result is a genuine instance of the recorded class -- it
+    catches correctly and prints correctly -- with whatever attributes
+    ``__init__`` would have set left unset, which is the honest trade. The
+    objects it would have stored (a live connection, a pool) belong to a
+    request that is not being made.
+    """
     error = event.meta.get("error")
     if not error:
         return None
     name = error.get("type", "TransportError")
-    message = error.get("message", "")
+    message = "{} (replayed)".format(error.get("message", ""))
     exception_class = getattr(module, name, None)
     if not (isinstance(exception_class, type) and issubclass(exception_class, BaseException)):
         exception_class = getattr(module, "TransportError", RuntimeError)
     try:
-        return exception_class("{} (replayed)".format(message))
-    except Exception:  # pragma: no cover - exotic constructor
-        return RuntimeError("{}: {} (replayed)".format(name, message))
+        return exception_class(message)
+    except Exception:
+        pass
+    try:
+        rebuilt = exception_class.__new__(exception_class)
+        BaseException.__init__(rebuilt, message)
+        return rebuilt
+    except Exception:  # pragma: no cover - exotic metaclass
+        return RuntimeError("{}: {}".format(name, message))
 
 
 def is_stream(res: Optional[Dict[str, Any]]) -> bool:

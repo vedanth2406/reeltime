@@ -71,6 +71,12 @@ dev = [
   "langchain-core>=1.5,<2; python_version>='3.10'",
   "langchain>=1.3,<2; python_version>='3.10'",
   "langchain-openai>=1.5,<2; python_version>='3.10'",
+  # boto3 for the urllib3 shim's reason to exist. The shim itself is tested
+  # against a plain urllib3 pool, but the claim worth testing is that a real
+  # botocore call records and replays -- botocore signs before it sends, and
+  # that is the whole reason `core/aws.py` exists, so a fake client would skip
+  # exactly the layer that made this milestone hard.
+  "boto3>=1.34",
 ]
 
 [project.urls]

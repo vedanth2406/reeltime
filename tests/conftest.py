@@ -106,9 +106,15 @@ class _Handler(BaseHTTPRequestHandler):
 
         if route.sse is not None:
             self.send_response(route.status)
-            self.send_header("content-type", "text/event-stream")
+            # SSE unless the route says otherwise: Bedrock streams
+            # `application/vnd.amazon.eventstream`, and the chunk-boundary
+            # machinery under test is the same either way.
+            self.send_header(
+                "content-type",
+                route.headers.get("content-type", "text/event-stream"))
             for key, value in route.headers.items():
-                self.send_header(key, value)
+                if key.lower() != "content-type":
+                    self.send_header(key, value)
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             for chunk in route.sse:
@@ -149,7 +155,8 @@ class _Handler(BaseHTTPRequestHandler):
 class ServerHandle:
     def __init__(self, server):
         self._server = server
-        self.base_url = "http://127.0.0.1:{}".format(server.server_address[1])
+        self.port = server.server_address[1]
+        self.base_url = "http://127.0.0.1:{}".format(self.port)
 
     def route(self, path, **kwargs):
         self._server.routes[path] = Route(**kwargs)
