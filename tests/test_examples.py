@@ -8,6 +8,7 @@ SDK, record, replay -- rather than any single layer.
 
 import json
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -16,11 +17,13 @@ import pytest
 
 import reeltime as tape
 from reeltime.core import paths
+from reeltime.core.http import common as http_common
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 pytest.importorskip("openai")
 pytest.importorskip("anthropic")
+pytest.importorskip("boto3")
 
 CHAT = {
     "object": "chat.completion",
@@ -72,6 +75,10 @@ def run(command, tape_dir, cwd, **env_extra):
         ANTHROPIC_API_KEY="sk-ant-notreal-" + "0" * 24,
         **env_extra,
     )
+    # `None` removes a variable rather than blanking it. Not the same thing to
+    # everyone downstream: botocore reads `AWS_PROFILE=""` as a request for a
+    # profile whose name is the empty string, and fails looking for it.
+    env = {key: value for key, value in env.items() if value is not None}
     return subprocess.run(
         [sys.executable, "-m", "reeltime.cli", "--tape-dir", str(tape_dir)] + command,
         cwd=str(cwd), env=env, capture_output=True, text=True, timeout=120,
@@ -239,6 +246,105 @@ def test_the_multi_tool_example_replays_its_random_choice(tmp_path, server):
 
     replayed = run(["replay", only_run_id(tape_dir)], tape_dir, tmp_path, **env)
     assert strategy in replayed.stdout
+
+
+# -- Bedrock over boto3, which embeds its own endpoint -------------------
+
+
+def free_port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+#: The example starts its own mock Bedrock, so unlike every example above it
+#: needs no `server` fixture -- but it does need a port nothing else is on.
+#: The default 8424 is fine for a person running it by hand and not for a
+#: suite that may share a machine with one.
+SERVER_LINES = """    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Bedrock)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+"""
+
+NO_SERVER_LINES = """    httpd = None
+    # The endpoint is gone. A replay that reaches the network cannot succeed
+    # from here, which is the point -- and the line count is unchanged.
+"""
+
+
+def test_the_bedrock_example_records_and_replays(tmp_path):
+    """boto3 through urllib3, end to end, including the binary event stream.
+
+    The milestone in one test: before this shim existed the run below recorded
+    *nothing at all* -- no event, no error, and a replay that went silently to
+    the real API.
+    """
+    tape_dir = tmp_path / ".tape"
+    example = tmp_path / "bedrock_agent.py"
+    source = (EXAMPLES / "bedrock_agent.py").read_text()
+    example.write_text(source)
+    env = {"BEDROCK_EXAMPLE_PORT": str(free_port())}
+
+    recorded = run(["run", sys.executable, str(example)], tape_dir, tmp_path, **env)
+    assert recorded.returncode == 0, recorded.stderr
+    assert "invoke_model: A tape you can rewind." in recorded.stdout
+    assert "streamed:     A tape you can rewind." in recorded.stdout
+    assert "recorded 2 events" in recorded.stderr
+
+    trace = trace_of(tape_dir)
+    assert [e.kind for e in trace.events] == ["llm", "llm"]
+    assert all(e.req["provider"] == "bedrock" for e in trace.events)
+    assert all(e.res["tokens"] == {"in": 137, "out": 6} for e in trace.events)
+    # Tokens populate and the cost stays null: Claude-on-Bedrock is served
+    # through cross-region inference profiles whose rate depends on the routing
+    # tier, and the request does not say which tier answered. `pricing.py`
+    # carries no row for it on purpose, and a missing number beats a wrong one.
+    assert trace.footer["cost_usd"] == 0
+    assert all("cost_usd" not in e.meta for e in trace.events)
+
+    # The second call streams `application/vnd.amazon.eventstream`, and its six
+    # frames are recorded as six chunks rather than one coalesced blob.
+    streamed = trace.events[1]
+    assert streamed.req["streamed"] is True
+    assert len(http_common.decode_chunks(streamed.res["stream"])) == 6
+
+    # Now take the endpoint away entirely and replay against the tape. Editing
+    # the source rather than blocking a port is what makes this conclusive: if
+    # anything reached the network, there is nothing there to answer it.
+    without_server = source.replace(SERVER_LINES, NO_SERVER_LINES).replace(
+        "    httpd.shutdown()\n", "    pass  # no server to shut down\n")
+    assert without_server != source, "the example's server block moved"
+    # Line for line, so every call site keeps the number it was recorded at.
+    assert len(without_server.splitlines()) == len(source.splitlines())
+    example.write_text(without_server)
+
+    replayed = run(["replay", only_run_id(tape_dir)], tape_dir, tmp_path, **env)
+    assert replayed.returncode == 0, replayed.stderr
+    assert replayed.stdout == recorded.stdout        # identical, from the tape
+    assert "replayed 2 events" in replayed.stderr
+
+
+def test_the_bedrock_example_needs_no_aws_account(tmp_path):
+    """No credentials in the environment, and no config file to find.
+
+    The example passes obviously fake keys of its own because botocore signs
+    before it sends. What this pins is that nothing *else* is required: a
+    reader who copies it onto a laptop that has never seen `aws configure`
+    gets the same run.
+    """
+    tape_dir = tmp_path / ".tape"
+    env = {"BEDROCK_EXAMPLE_PORT": str(free_port()),
+           "AWS_CONFIG_FILE": str(tmp_path / "no-such-config"),
+           "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "no-such-credentials"),
+           "AWS_EC2_METADATA_DISABLED": "true"}
+    scrubbed = {key: None for key in
+                ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+                 "AWS_PROFILE", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+
+    result = run(["run", sys.executable, str(EXAMPLES / "bedrock_agent.py")],
+                 tape_dir, tmp_path, **dict(scrubbed, **env))
+    assert result.returncode == 0, result.stderr
+    assert "recorded 2 events" in result.stderr
 
 
 # -- the examples stand alone -------------------------------------------
