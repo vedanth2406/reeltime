@@ -1,6 +1,6 @@
 # Status
 
-Handoff notes, current as of **2026-08-19**. Written so a session starting cold
+Handoff notes, current as of **2026-08-20**. Written so a session starting cold
 can pick up without re-deriving anything or re-litigating decisions that were
 already made for reasons.
 
@@ -14,30 +14,39 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 
 | | |
 |---|---|
-| Milestones done | M1–M9, including M5.5. There is no M8 — see the roadmap |
+| Milestones done | M1–M10, including M5.5. There is no M8 — see the roadmap |
 | Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0`, `0.5.0` — all on PyPI |
-| In the tree | `0.5.0` released, **plus M10 half built** — see "M10 is half built" below |
-| Tests | 738 passing, 6 deselected (the wheel gate), 95% on `core/` |
+| In the tree | **M10 complete and unreleased.** `0.5.0` is the last published version |
+| Tests | 833 passing, 7 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
 | Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
-**In progress: M10 — `urllib3` interception, closing the Bedrock/boto3 gap.**
-The core works and the tests are not written yet;
-[M10 is half built](#m10-is-half-built--start-here) is the handoff. There is
-no M8; that slot was emptied by the resequencing, not skipped. The web UI moved
-from M10 to M11 to make room; the roadmap at the bottom says why, and why that
-one shuffled where M8 did not.
+**M10 is done and sitting unreleased in the tree** — `urllib3` interception,
+closing the Bedrock/boto3 gap. Core, tests, example and docs are all in;
+[What M10 shipped](#what-m10-shipped) is the summary and
+[the SigV4 finding](#forking-below-a-signer-the-sigv4-asymmetry) is the one
+piece of it that changed a decision rather than adding code. There is no M8;
+that slot was emptied by the resequencing, not skipped. The web UI moved from
+M10 to M11 to make room; the roadmap at the bottom says why, and why that one
+shuffled where M8 did not.
 
-There is no outstanding release work. `0.5.0` is published, tagged at the
-commit it was built from, and verified.
+**The next thing to do is release it.** Follow [`RELEASING.md`](RELEASING.md)
+from step 0; the `CHANGELOG.md` entry is written and sits under
+`## [Unreleased]`, and the version has not been chosen or bumped yet. `0.5.0`
+is published, tagged at the commit it was built from, and verified.
 
 ### Two things to know before the next release
 
-- `pytest -m wheel` matters more than usual now: `core/langchain.py`,
-  `reeltime/langchain.py` and `core/http/aiohttp_guard.py` are all new modules
-  in the wheel, so a packaging change can drop one without the unit suite
-  noticing.
+- `pytest -m wheel` matters more than usual now. M9 put `core/langchain.py`,
+  `reeltime/langchain.py` and `core/http/aiohttp_guard.py` in the wheel and M10
+  added `core/http/urllib3_shim.py`, `core/aws.py` and
+  `core/decoders/bedrock.py`, so a packaging change can drop one without the
+  unit suite noticing. **This is now checked rather than remembered:**
+  `test_the_wheel_ships_every_module_in_the_source_tree` reads the module list
+  off `src/reeltime/` and fails naming anything missing from the artifact.
+  Verified able to fail, by excluding a module from the wheel and watching it
+  go red — every *other* wheel test still passed, which is exactly the point.
 - The README states a supported `langchain-core` range. If the CI
   `langchain-core floor` job is red, raise `MINIMUM` in `core/langchain.py`
   **and** the range in the README — do not work around it. That job has already
@@ -80,6 +89,7 @@ the tag matches the artifact before announcing it.
 | **5.5** | MCP adapter: `mcp` events, `tape.mcp.connect` over stdio and HTTP/SSE, `tape.mcp.wrap`, discovery recording, readable `tape show`, tool-set reporting in `tape diff`, `--patch mcp.<tool>.result=`, a mock-server example |
 | **7** | `tape doctor` — run a command N times, report each boundary where the runs disagreed with its call site and a suggestion, plus the path split. `--runs`, `--json`, `--fail-on-findings` |
 | **9** | LangChain adapter: `chain` events, `tape.langchain.install()` / `handler()`, `tape run --langchain`, node tree in `tape show`, graph-change reporting in `tape diff`, a version gate with a CI floor job, an example, and the `aiohttp` guard |
+| **10** | `urllib3` interception: `HTTPConnectionPool.urlopen` shim (record + replay, streaming chunk-exact), the Bedrock decoder across five model families with a binary event-stream parser, dummy-credential injection for replay, the `x-amz-security-token` redaction fix, a mock-Bedrock example, and the SigV4 patch decision below |
 | **—** | The patch-grammar audit: `tool.args` and `mcp.args` implemented, `http.url` fixed, `+=`/`~=` on a JSON document refused at parse time, the fork footer written to disk, and `tests/test_patch_effects.py` |
 
 CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `show`.
@@ -212,18 +222,19 @@ behaviour must not depend on the platform supplying one.
 
 ---
 
-## M10 is half built — start here
+## What M10 shipped
 
-**The tree is mid-milestone.** M10 (`urllib3` interception, closing the
-Bedrock/boto3 gap) has a working core and no tests yet. Everything below is
-committed, the suite is green, and the working tree is consistent — it is
-simply not finished. Pick up at "What is left" at the end of this section.
+**M10 is complete.** `urllib3` interception, closing the Bedrock/boto3 gap:
+core, tests, the example, and the docs. The suite is green at 833 passing, the
+wheel gate at 7, and `core/` is at 95%. What is left is the *release*, which is
+[`RELEASING.md`](RELEASING.md) from step 0 and not a milestone task.
 
 The assessment that authorised it is worth reading first if you are cold: the
 seam is `HTTPConnectionPool.urlopen`, public and documented, and unlike aiohttp
 the replay side was prototyped *before* any code was written and turned out to
 be one public keyword-only constructor. See the M9 framework audit above for
 why Bedrock was the gap worth closing.
+
 
 ### Landed first, deliberately separate
 
@@ -236,14 +247,14 @@ that none of them is hostage to M10 finishing:
 | `7075ec8` | **`x-amz-security-token` was reaching disk.** The STS session credential, sent by anything using temporary AWS credentials — an assumed role, an instance profile, SSO, a Lambda. `Authorization` beside it was already dropped by name and the `AKIA`/`ASIA` id inside it was already pattern-matched, so a signed request *looked* covered. Also `x-amzn-authorization`, and a pattern for the same credential in a presigned URL's query string. Landed ahead of M10 because it applies to anyone using boto3 today whether or not this milestone ships. |
 | `9618087` | **The renumber**, plus the boundary-rule design note. |
 
-### The uncommitted core — what each piece is for
+### The core — what each piece is for
 
 | File | Role |
 |---|---|
 | [`core/http/urllib3_shim.py`](src/reeltime/core/http/urllib3_shim.py) | The shim. Patches `HTTPConnectionPool.urlopen`; records by wrapping the response in a file-like, replays by building a fresh `HTTPResponse` over the recorded chunks. Installed last in `HttpShim` so the install order matches the way a request travels. |
 | [`core/aws.py`](src/reeltime/core/aws.py) | Dummy-credential injection for replay. Needed because **botocore signs before it sends**, so a missing credential raises `NoCredentialsError` and the shim underneath is never reached at all — measured, with the environment scrubbed `urlopen` sees zero calls. Scoped three ways: replay only, tapes that actually touched `.amazonaws.com` only, and machines with nothing configured only. Reported through `ReplaySummary.environment` so a replay that works on a laptop with no AWS config is not a mystery. |
 | [`core/decoders/bedrock.py`](src/reeltime/core/decoders/bedrock.py) | The provider decoder. Handles Anthropic-on-Bedrock, Titan, Nova, Meta and the Converse API, plus a binary event-stream frame parser (`iter_frames`) because Bedrock streams `application/vnd.amazon.eventstream`, not SSE. |
-| [`examples/bedrock_agent.py`](examples/bedrock_agent.py) | Mock Bedrock endpoint, both operations, no AWS account. Currently records 2 `llm` events and replays identically, with `137→6` tokens and `$0.0020` cost populated. |
+| [`examples/bedrock_agent.py`](examples/bedrock_agent.py) | Mock Bedrock endpoint, both operations, no AWS account. Currently records 2 `llm` events and replays identically, with `137→6` tokens. `cost_usd` is **null** on purpose — it runs Claude-on-Bedrock, which has no price row; see the pricing section. |
 
 Also touched: `core/http/__init__.py` (registers the shim),
 `core/http/common.py` (`application/vnd.amazon.eventstream` added to
@@ -297,56 +308,175 @@ counts. `matches` now also recognises the path shape, `/model/<id>/<operation>`
 with one of four known operations, which is specific enough to carry the
 recognition on its own.
 
-### Bedrock pricing: partly verified, and deliberately incomplete
+### Bedrock pricing: now from the Price List API, and still deliberately incomplete
 
-`https://aws.amazon.com/bedrock/pricing/` renders its current-model tables
-client-side, so only the rows still present in the served HTML could be checked.
-**Only those rows were added** — `anthropic.claude-3-5-sonnet` ($6.00/$30.00),
-`anthropic.claude-instant`, `anthropic.claude-v2:1`, and
-`amazon.titan-text-lite`. Nova and the Claude-5 family are absent on purpose:
-their **token counts populate and `cost_usd` stays null**, which is what this
-project does with a price it does not know.
+**The source changed on 2026-08-20 and that is the important part.**
+`https://aws.amazon.com/bedrock/pricing/` still renders its current-model
+tables client-side, so it was never a usable source for anything not in the
+served HTML — which is why M10 originally shipped four hand-read rows. Every
+Bedrock row is now read from the **AWS Price List Query API** instead: public,
+unauthenticated, machine-readable, and versioned per region.
 
-**Do not alias Bedrock ids to the first-party rows.** It is the obvious
-shortcut and it produces confidently wrong numbers: Claude 3.5 Sonnet is
-**$3.00/$15.00 direct from Anthropic and $6.00/$30.00 on Bedrock**, which is
-the figure that was actually read off the page. Bedrock is its own price list
-for the same models. `BEDROCK_REGION_PREFIXES` strips the geography off a
-cross-region inference profile (`us.anthropic.claude-…`) before lookup, so
-those resolve without a row each.
+```
+https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/region_index.json
+https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/<region>/index.json
+```
 
-Getting the remaining prices needs a browser, or the AWS Price List API, and is
-a pre-flight item either way — `RELEASING.md` step 0 already requires
-re-verifying `pricing.py` before a release.
+**The `usagetype` field is what makes it trustworthy.** A model has several
+SKUs and they are not the same product: `USE1-NovaLite-input-tokens` is the
+base on-demand rate, while `-batch` is exactly half, `-custom-model` matches,
+and `-cross-region-global` is a different routing tier. Reading "the price"
+without filtering on that gives a number that is 0.5x or 1.1x the real one.
 
-### What is left
+Added, verified against **us-east-1 and us-west-2, which agree exactly**:
 
-Nothing here is blocked; it is ordinary remaining work.
+| Row | per 1M in / out |
+|---|---|
+| `amazon.nova-micro` | $0.035 / $0.14 |
+| `amazon.nova-lite` | $0.06 / $0.24 |
+| `amazon.nova-pro` | $0.80 / $3.20 |
+| `amazon.nova-premier` | $2.50 / $12.50 |
 
-- [ ] **`tests/test_urllib3.py`** — record/replay through the shim against a
-      real socket, the way `tests/test_http.py` does it.
-- [ ] **`tests/test_bedrock.py`** — the decoder over each family's response
-      shape, and the frame parser on a truncated tail.
-- [ ] **The `requests`-on-`urllib3` regression test.** Measured as already
-      handled by the M1 boundary rule, and pinned so it stays that way: inside
-      a `RequestsShim`-recorded call, `urlopen` is reached with `in_boundary()`
-      already true, so one event and not two.
-- [ ] **Replay with `AWS_*` scrubbed and no config files.** The claim
-      `core/aws.py` exists for, and it has to be tested with the environment
-      actually emptied rather than with dummy values pre-set.
-- [ ] **Byte-exact framing assertion** — prelude and both CRC32s per message,
-      and the recorded chunk *count* as well as the joined bytes (see bug 2).
-- [ ] **A boto3 call inside `@tape.tool` is one event.**
-- [ ] **Wire `examples/bedrock_agent.py` into the suite**, and check the
-      example count assertion in `tests/test_examples.py` still holds.
-- [ ] **Coverage ≥85% on `core/`, and `pytest -m wheel` green** — three new
-      modules are in the wheel now.
-- [ ] **README, STATUS, CHANGELOG.** The README's "What this can't replay"
-      currently names `urllib3`/Bedrock as a gap and will need moving, the same
-      way aiohttp moved from "unsupported" to "guarded" in 0.5.0.
-- [ ] Decide whether `chain`-style patch grammar applies here. It does not
-      today: no new `--patch` fields were added, so `test_patch_effects.py`
-      needs no case. **If that changes, all four steps apply.**
+`anthropic.claude-instant` and `anthropic.claude-v2:1` were re-verified against
+the same source and were already correct.
+
+**Removed: `anthropic.claude-3-5-sonnet` ($6.00/$30.00).** It is not sold as an
+in-region SKU at all — it does not appear in any region's price list, because
+from 3.5 Sonnet on Claude is served through **cross-region inference
+profiles**, and the rate depends on which routing tier the profile used: global
+vs geo vs in-region. Nothing in a recorded request says which one answered it,
+so a single rate per model id is *wrong* rather than incomplete. Tokens still
+populate; `cost_usd` stays null. The `$6.00/$30.00` figure read off the page in
+M10 was one tier's rate presented as the model's rate.
+
+**Nova 2.0 is absent for exactly the same reason**, and this one is measurable:
+`amazon.nova-2-lite-v1:0` is $0.30/$2.50 per 1M through a global cross-region
+profile and $0.33/$2.75 in-region. A prefix collision here would have been
+silent, so `test_nova_2_does_not_borrow_the_first_generation_price` pins it —
+had the rows been spelled `amazon.nova-` rather than `amazon.nova-lite`,
+longest-prefix matching would have priced every Nova 2.0 call at the older,
+cheaper rate.
+
+**`global.` is deliberately not in `BEDROCK_REGION_PREFIXES`.** It looks like
+one more geography and is not: stripping it would price a global-profile call
+at the in-region rate. Left unstripped it matches nothing and reports no cost,
+which is the honest answer. `us.` / `eu.` / `apac.` are still stripped.
+
+**Two simplifications that are stated rather than hidden.** The table is
+US-based: the same Nova Lite is $0.06/$0.24 in us-east-1 and us-west-2 but
+$0.078/$0.312 in eu-central-1, so a European run is under-reported rather than
+guessed. And latency-optimised Nova Pro is billed at $1.00/$4.00 against the
+standard $0.80/$3.20 while using the *same* model id, so a latency-optimised
+call is under-reported too — same class as batch and prompt caching, which the
+module docstring already declares unmodelled.
+
+### Follow-up: make the Bedrock rows re-runnable — M14
+
+The rows above are still **hand-transcribed** from an API response, which means
+the next person to re-verify them does what this session did: fetch three
+region files, filter on `usagetype`, and copy numbers across by hand. That is
+the part worth automating, and it is small and self-contained.
+
+A script — `tools/refresh_bedrock_pricing.py`, or a `pytest -m pricing` check —
+that fetches the region index, filters to base on-demand SKUs, and diffs the
+result against `PRICES` would turn `RELEASING.md` step 0's "re-verify
+`pricing.py`" from a manual reading task into a command that exits non-zero.
+It would also catch the failure mode this section exists to document: a model
+quietly acquiring a `-cross-region-global` SKU, which is the signal that its
+single row has become wrong rather than merely stale.
+
+Scoped as **M14**, after v1.0, because it is a maintenance tool rather than a
+user-facing capability. The OpenAI and Anthropic rows have no equivalent
+machine-readable source, so this covers Bedrock only — which is also where the
+transcription is hardest and the tiering most likely to change under us.
+
+### Forking below a signer: the SigV4 asymmetry
+
+**This is the one part of M10 that changed a decision rather than adding code,
+and it was found by measuring.** The checklist asked whether `chain`-style
+patch grammar applied here. The literal answer is no — no new `--patch` fields
+were added, so `test_patch_effects.py` needs no case and the four-step rule is
+not triggered. But testing the *existing* fields against this seam found them
+silently doing nothing, which is the exact failure the patch-grammar audit
+exists to prevent.
+
+Measured, not reasoned:
+
+| Patch | Before M10 finished |
+|---|---|
+| `llm.model=…` on a Bedrock fork | request went out with the **original** model; footer reported nothing |
+| `llm.response="…"` on a Bedrock fork | request **still hit the network**; agent got the original answer |
+
+The cause is that `engine.substitute`, `rewrite_url` and `rewrite_body` are
+wired into `httpx_shim` and **only** into `httpx_shim`.
+
+**Why the fix is not "mirror what httpx does".** botocore signs the request and
+*then* calls `urlopen`, so this seam sits below the signer. SigV4 covers the URI
+path and a hash of the payload — verified directly by re-signing with a changed
+body and a changed path and watching the signature change both times. And on
+Bedrock the model id is a **path segment**, not a body field, so `llm.model` is
+precisely the case that would rewrite signed bytes. Mirroring httpx here would
+replace a silent no-op with `SignatureDoesNotMatch`: an error about
+credentials, for what is really an unsupported patch.
+
+So the two halves were split by what the signature actually permits:
+
+- **Request-rewriting patches are refused**, in `check_patches`, before the
+  fork replays anything. `fork.is_signed_request` recognises a signed request
+  from its header *names* — an `Authorization` beside any `x-amz-*` — because
+  the redactor drops that header's value before it reaches disk, so the
+  signature is not there to inspect and does not need to be. The message names
+  the reason and points at the patch that does work.
+- **Result substitution is implemented**, because a substituted result sends
+  nothing and so has nothing left to invalidate. The substituted body is built
+  from the parent event's own recorded response, so it comes back in that model
+  family's shape — a Titan caller still reads `results[0].outputText`, a
+  Claude-on-Bedrock caller still reads `content[0].text`. A fixed template
+  would make a Titan agent raise `KeyError` instead of showing what it does
+  with a different answer, which is the whole point of the patch.
+
+That shape logic lives in `core/decoders/` (a new optional `substitute` slot on
+`Decoder`, plus `decoders.substituted_body`), **not** in the shim — the
+transport is required to know no providers exist, and Bedrock is one endpoint
+in front of families that agree on nothing.
+
+### Still open: fork patches reach only the httpx seam — M13
+
+**This is a known bug with a number, deliberately, because a known bug without
+one never gets fixed.** M10 fixed the part that is M10's own territory. The
+general case is larger and predates it:
+
+| Seam | Request rewriting (`llm.model`, `llm.system`, `http.url`, `http.body`) | Result substitution (`llm.response`) |
+|---|---|---|
+| `httpx` / `httpx2` | ✅ | ✅ |
+| `urllib3`, signed (Bedrock) | **refused, with a reason** — M10 | ✅ — M10 |
+| `urllib3`, unsigned | ✕ **accepted, silently does nothing** | ✅ — M10 |
+| `requests` | ✕ **accepted, silently does nothing** | ✕ **accepted, silently does nothing** |
+
+The `requests` row has been true since **M2** and is not an M10 regression;
+`requests_shim` has never had the fork hooks. The unsigned-`urllib3` row is the
+part of M10's seam the signature argument does not cover, so refusing it on
+signature grounds would be a lie.
+
+**Why it was not fixed here:** the SigV4 refusal is specific to signed
+requests, and extending it to every non-httpx event needs the trace to record
+*which seam* recorded each event — a trace-format addition — or the hooks
+wiring into both remaining shims. Either is its own piece of work, and it is
+`requests`-shaped as much as `urllib3`-shaped.
+
+**M13, after v1.0.** Two ways to do it, and the choice has not been made:
+
+1. Wire `substitute` / `rewrite_url` / `rewrite_body` into `requests_shim` and
+   into the unsigned `urllib3` path, so the grammar means the same thing
+   everywhere. More work, no new trace fields, and the honest end state.
+2. Record the recording seam on each event and refuse what that seam cannot do,
+   the way signed requests are refused now. Cheaper, and it leaves the grammar
+   narrower than the docs imply.
+
+Prefer (1); (2) is the fallback if the rewrite hooks turn out to be awkward at
+the `requests` layer. Either way the rule from the patch-grammar audit stands:
+**a patch that parses and silently does nothing is worse than one that is
+refused.**
 
 ---
 
@@ -566,6 +696,33 @@ The practical consequence for whoever adds the next interception point:
 and measure rather than reason.** Both times the answer was already yes, and
 both times it would have been easy to build a redundant mechanism instead.
 
+**A patch is refused when the seam cannot honour it, never accepted and
+dropped.** M10's version of this is the SigV4 refusal above: botocore signs
+before reeltime's seam sees the request, so rewriting the URL or body there
+would be rejected by AWS rather than run. The general rule is the one the
+patch-grammar audit paid for — `tool.args` parsed, reported itself applied, and
+did nothing for two releases, and that sends you looking for the bug in your own
+agent. **A patch that silently does nothing is worse than one that is
+refused**, so when a boundary cannot honour a field, the fork stops before it
+replays anything and says why. The fields that are still silently dropped are
+listed under M13; they are a bug with a number, not a design.
+
+**Result substitution is what survives below a signer.** Rewriting a request
+needs to happen above whoever signs it; substituting a result needs no request
+at all. That asymmetry is why `llm.response` works at the `urllib3` seam and
+`llm.model` cannot, and it is worth remembering before designing any future
+interception point that sits underneath an SDK's own request preparation.
+
+**A substituted body is built from the parent's recorded response, not from a
+template.** The httpx shim can fabricate an OpenAI- or Anthropic-shaped body
+because its providers agree on a shape. Bedrock is one endpoint in front of
+families that agree on nothing — Titan reads `results[0].outputText`, Claude
+reads `content[0].text`, Meta reads `generation` — so a template would hand a
+Titan agent a body it raises on. Rewriting the recorded body in place keeps the
+family, the field names, and every key the decoder does not read. The logic
+lives in `core/decoders/`, behind an optional `substitute` slot on `Decoder`,
+because the transport layer is required not to know a provider exists.
+
 **A doctor finding is a call site, not an event.** An agent in a loop reads the
 clock forty times, and forty findings bury the one that matters. Findings are
 grouped by `(site, kind, name)` and counted; the report is as long as the number
@@ -739,9 +896,11 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | 5.5 | **MCP adapter** | ✅ |
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
 | 9 | LangChain adapter, remaining framework coverage | ✅ |
-| 10 | `urllib3` interception — Bedrock/boto3, streaming included | **in progress** |
-| 11 | Web UI | |
+| 10 | `urllib3` interception — Bedrock/boto3, streaming included | ✅ unreleased |
+| 11 | Web UI | **next** |
 | 12 | Overhead benchmarks, docs site → v1.0 | |
+| 13 | Fork patches at the `requests` and `urllib3` seams | after v1.0 |
+| 14 | Re-runnable Bedrock pricing check against the Price List API | after v1.0 |
 
 **There is no M8.** The original spec §11 had M8 = web UI. The resequencing
 after the competitive analysis moved the web UI to M10, which emptied the slot;
@@ -778,6 +937,15 @@ M9 shipped the LangChain callback adapter and closed the framework question:
 see "The framework audit" above for what else was considered and why it was
 not built. It was the last *adapter*-shaped milestone; M10 is transport-shaped,
 which is a different job.
+
+M14 is the pricing-refresh script under "Follow-up" above: small, self-contained,
+and it turns a manual re-verification into a command that fails.
+
+M13 is the fork-patch gap under "Still open" above — the grammar reaches only
+the httpx seam, and on `requests` that has been true since M2. It sits after
+v1.0 because it is a correctness gap in a feature that works everywhere people
+currently use it, not a hole in coverage; the signed-request half, which is the
+half M10 made reachable, is refused loudly rather than silent.
 
 M12 is what stands between here and v1.0: measure the recording overhead per
 boundary kind and publish a docs site. The README currently claims ~2 ms per

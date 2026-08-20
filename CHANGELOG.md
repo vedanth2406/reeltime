@@ -3,6 +3,104 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+M10 — `urllib3` interception. The last uncovered HTTP stack, and the one where
+the failure was worst.
+
+### Added
+
+- **`boto3` / `botocore` / Bedrock are recorded and replayed.** Until now an
+  agent on Bedrock recorded **nothing at all** — no event, no error, and a
+  `tape replay` that quietly went to the real API. botocore is built on
+  `urllib3`, which sits below the httpx and requests shims, so nothing ever saw
+  the call. The new seam is `HTTPConnectionPool.urlopen`: public, documented,
+  and underneath every AWS SDK without knowing any of them exist.
+
+  This is a **silent-recording fix, not a new feature**, and it is the largest
+  version of the failure design principle 4 forbids. If you have replayed a
+  Bedrock agent before this release, that replay was making live calls.
+
+- **Bedrock's binary event stream is recorded frame for frame.** Bedrock streams
+  `application/vnd.amazon.eventstream`, not SSE — a length prelude, typed
+  headers and two CRC32s per message. Each message is recorded as its own chunk
+  rather than one coalesced blob, and the test that proves it hands the recorded
+  bytes back to **botocore's own parser**, which validates both checksums.
+
+- **Amazon Nova pricing**, read from the AWS Price List Query API rather than
+  the pricing page (which renders its tables client-side and cannot be read
+  programmatically): `amazon.nova-micro` $0.035/$0.14, `amazon.nova-lite`
+  $0.06/$0.24, `amazon.nova-pro` $0.80/$3.20 and `amazon.nova-premier`
+  $2.50/$12.50 per 1M tokens, verified against us-east-1 and us-west-2.
+
+- **A Bedrock provider decoder**, covering Anthropic-on-Bedrock, Titan, Nova,
+  Meta and the Converse API, plus the Converse/`invoke-with-response-stream`
+  operations. Token counts populate for all of them. It recognises Bedrock by
+  the path shape as well as the hostname, so an `endpoint_url` override — a VPC
+  endpoint, a gateway, LocalStack — no longer silently loses its token counts.
+
+- **Replay works with no AWS credentials configured.** botocore signs *before*
+  it sends, so a missing credential raises `NoCredentialsError` before the shim
+  underneath is ever reached. Dummy credentials are injected for replay only,
+  for tapes that actually touched `.amazonaws.com`, and only on machines with
+  nothing configured — and the fact is reported in the replay summary, so a
+  replay that works on a laptop with no AWS config is not a mystery.
+
+- **`--patch llm.response=` works on a signed request**, and substitutes into
+  the recorded response's **own model family shape** — a Titan caller still
+  reads `results[0].outputText`, a Claude-on-Bedrock caller still reads
+  `content[0].text`, and fields the decoder does not read survive untouched.
+
+### Changed
+
+- **Request-rewriting patches are refused on an AWS-signed event.**
+  `--patch llm.model=…`, `llm.system`, `llm.temperature`, `http.url` and
+  `http.body` now fail with an explanation instead of being accepted and
+  silently doing nothing.
+
+  botocore signs the request before it reaches reeltime's seam, and SigV4
+  covers the URI path and a hash of the body — and on Bedrock the model id is a
+  *path segment*, not a body field. Rewriting either would produce
+  `SignatureDoesNotMatch`, an error about credentials for what is really an
+  unsupported patch. The message names the reason and points at
+  `llm.response=`, which works because a substituted result sends nothing.
+
+  Previously these patches parsed, were accepted, and changed nothing — the
+  same failure `tool.args` had for two releases.
+
+- **`anthropic.claude-3-5-sonnet` is no longer priced on Bedrock**, and neither
+  is Nova 2.0. Both are served through **cross-region inference profiles**,
+  where the rate depends on the routing tier used — global vs geo vs in-region
+  — and nothing in a recorded request says which tier answered it. A single
+  rate per model id would be *wrong* rather than incomplete, so the row is gone
+  and `cost_usd` reports null. Token counts are unaffected.
+
+  The previously published `$6.00/$30.00` was one tier's rate presented as the
+  model's rate. `anthropic.claude-instant` and `anthropic.claude-v2:1` are
+  legacy in-region SKUs, were re-verified against the same source, and stay.
+
+### Fixed
+
+- **`x-amz-security-token` was reaching disk.** The STS session credential sent
+  by anything using temporary AWS credentials — an assumed role, an instance
+  profile, SSO, a Lambda. `Authorization` beside it was already dropped by name
+  and the `AKIA`/`ASIA` id inside it was already pattern-matched, so a signed
+  request *looked* covered. Also `x-amzn-authorization`, and the same credential
+  in a presigned URL's query string.
+
+- **A `requests` call is still one event, not two.** `requests` is built on
+  `urllib3`, so it now passes through two shims; the M1 outermost-boundary rule
+  already covered it, and there is a regression test pinning it. Same for a
+  redirect retried inside `urlopen`.
+
+### Known
+
+- **Fork patches reach only the httpx seam.** Request-rewriting patches are
+  refused on signed requests (above), but on an *unsigned* `urllib3` or
+  `requests` event they are still accepted and silently do nothing. Result
+  substitution works at the `urllib3` seam and not yet at the `requests` one.
+  Scheduled as **M13**; see `STATUS.md`.
+
 ## [0.5.0] — 2026-08-19
 
 M9 — framework coverage. One adapter, and one deliberate non-adapter.

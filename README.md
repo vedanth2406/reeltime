@@ -151,7 +151,8 @@ pip install reeltime
 ```
 
 Nothing is required at runtime: the core is standard library only. `httpx`,
-`httpx2`, and `requests` are patched if you have them.
+`httpx2`, `requests` and `urllib3` are patched if you have them — the last of
+those is what puts `boto3`/Bedrock on tape, since botocore is built on it.
 
 ## Quickstart
 
@@ -384,6 +385,30 @@ buffer or invalid JSON aborts without creating a run.
 A fork needs live credentials from event N onward. Those are checked **before**
 anything is replayed, so a missing key costs you an error message rather than a
 replayed prefix and then an error message.
+
+#### Signed requests (Bedrock / boto3)
+
+A request that was **AWS SigV4-signed** before reeltime saw it takes result
+substitution only:
+
+```bash
+tape fork <run> --at 3 --patch 'llm.response="I could not find that file."'   # ✅
+tape fork <run> --at 3 --patch 'llm.model=amazon.titan-text-express-v1'       # ✕ refused
+```
+
+botocore signs, *then* calls `urllib3` — which is where reeltime's seam is — and
+the signature covers the URI path and a hash of the body. On Bedrock the model
+id is a **path segment**, not a body field, so `llm.model` is exactly the case
+that would change signed bytes. Rewriting either would produce
+`SignatureDoesNotMatch`: an error about credentials, for what is really an
+unsupported patch. So those patches are refused before the fork runs, with a
+message naming the reason and pointing at `llm.response`.
+
+Substituting a result has no such problem, because the request is never sent.
+The substituted body is built from the parent event's **own recorded response**,
+so it comes back in that model family's shape — a Titan caller still reads
+`results[0].outputText`, a Claude-on-Bedrock caller still reads
+`content[0].text`, and every field the decoder does not read survives.
 
 ## Diff
 
@@ -682,6 +707,21 @@ functions over the recorded bytes ([`core/decoders/`](src/reeltime/core/decoders
 Adding a provider is one module and one row in a pricing table, with nothing
 patched.
 
+The same argument is why **Bedrock** works. `botocore` is not on httpx at all —
+it is on `urllib3`, below every other shim — so a Bedrock agent used to record
+*nothing*: no event, no error, and a replay that quietly went to the real API. The fix was another seam, not another adapter:
+`HTTPConnectionPool.urlopen`, which is public, documented, and sits under every
+AWS SDK without knowing any of them exist. `requests` is built on `urllib3` too,
+and a `requests` call still records as **one** event rather than two, because
+the outermost-boundary rule from M1 already covered it.
+
+Bedrock's streaming is not SSE but `application/vnd.amazon.eventstream`, a
+binary framing with a length prelude, typed headers and two CRC32s per message.
+It is recorded frame for frame — one recorded chunk per message, not one
+coalesced blob — and the test that proves it hands the recorded bytes back to
+**botocore's own parser**, which validates both checksums and rejects the whole
+stream if a byte is out.
+
 ## Numbers
 
 Measured on the included benchmark (`python examples/m3_replay_speed.py`) — an
@@ -748,9 +788,15 @@ Being precise about the boundary is the point.
   release, to cover a stack no LLM SDK reeltime targets is built on. So the
   cost went into the guard instead, which is the part that was actually
   dangerous.
+- **Forking a *signed* request rewrites nothing.** A Bedrock call is signed by
+  botocore before reeltime's seam sees it, and AWS SigV4 covers the URL and a
+  hash of the body — so `--patch llm.model=…`, `llm.system`, `http.url` and
+  `http.body` are **refused** on such an event rather than sent and rejected as
+  a bad signature. `--patch llm.response=…` works normally: substituting a
+  completion sends nothing, so there is nothing to invalidate. See
+  [The patch grammar](#the-patch-grammar).
 - **Raw sockets, `urllib`, gRPC and WebSockets.** Not intercepted, and without
-  a guard. `botocore`/`boto3` (so Bedrock) is on `urllib3` and is the largest
-  remaining gap; the OpenAI Realtime API is a WebSocket, which is not a
+  a guard. The OpenAI Realtime API is a WebSocket, which is not a
   request/response boundary at all. `@tape.tool` is the supported way to put a
   boundary around them today.
 
@@ -835,9 +881,10 @@ tape.install(
 
 Runnable agents, all covered by the test suite — see [examples/](examples/).
 The two SDK examples import nothing from reeltime, which is the zero-edit claim
-made concrete. `mcp_agent.py` and `langchain_agent.py` need no API key and no
-network: one drives the mock MCP server next to it, the other an embedded mock
-provider.
+made concrete. `mcp_agent.py`, `langchain_agent.py` and `bedrock_agent.py` need
+no API key and no network: they drive the mock MCP server next to them, an
+embedded mock provider, and a mock Bedrock endpoint respectively — the last of
+those needs no AWS account either.
 
 ## Roadmap
 
@@ -852,9 +899,11 @@ provider.
 | 5.5 | MCP adapter — `mcp` events, both transports, tool-set diff | ✅ |
 | 7 | `tape doctor` — find a run's nondeterminism sources, **v0.4.0** | ✅ |
 | 9 | LangChain adapter — `chain` events, graph diff, the aiohttp guard, **v0.5.0** | ✅ |
-| 10 | `urllib3` interception — Bedrock/boto3 record and replay | **next** |
-| 11 | `tape ui` — a local viewer | |
+| 10 | `urllib3` interception — Bedrock/boto3 record and replay | ✅ |
+| 11 | `tape ui` — a local viewer | **next** |
 | 12 | Overhead benchmarks, docs site | → v1.0 |
+| 13 | Fork patches at the `requests` and `urllib3` seams | after v1.0 |
+| 14 | Re-runnable Bedrock pricing check against the AWS Price List API | after v1.0 |
 
 MCP shipped early on purpose: no other record/replay tool captures MCP sessions,
 and a server that exposes a different tool set between runs is exactly the kind
@@ -867,7 +916,7 @@ of thing that changes an agent's behaviour invisibly. See
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 738 tests
+pytest                                  # 833 tests
 pytest --cov --cov-report=term-missing  # core/ is at 95%
 python examples/m3_replay_speed.py      # the benchmark above
 ```

@@ -13,6 +13,7 @@ silently.
 | [`multi_tool_agent.py`](multi_tool_agent.py) | Local tools via `@tape.tool`, one of them destructive — replay does not delete the file twice. | yes |
 | [`mcp_agent.py`](mcp_agent.py) + [`mcp_server.py`](mcp_server.py) | An MCP session over stdio, recorded as `mcp` events. Replay never starts the server. | **no** |
 | [`langchain_agent.py`](langchain_agent.py) | A LangChain/LangGraph agent recorded as chain structure — node, path, depth, fan-out. | **no** |
+| [`bedrock_agent.py`](bedrock_agent.py) | boto3 → Bedrock through the `urllib3` seam, including the binary event stream. Needs no AWS account. | **no** |
 | [`truncation_bug.py`](truncation_bug.py) | The demo: a context bug that only `--context --diff` makes visible. | **no** |
 | [`m1_ambient.py`](m1_ambient.py) | The ambient boundaries — `random`, `uuid`, the clock — recorded and replayed. | **no** |
 | [`m3_replay_speed.py`](m3_replay_speed.py) | Benchmark: record vs replay wall clock, and recording overhead. | **no** |
@@ -38,7 +39,7 @@ Anthropic-compatible endpoint:
 OPENAI_BASE_URL=http://localhost:11434/v1 tape run python examples/openai_agent.py
 ```
 
-## The four worth running twice
+## The five worth running twice
 
 `multi_tool_agent.py` — record it, watch it delete `temp.log` from a scratch
 directory, then replay it: the agent reaches the same decision and reports the
@@ -59,10 +60,18 @@ LANGCHAIN_EXAMPLE_TOOLS=extended tape run python examples/langchain_agent.py
 tape diff <first> <second>
 ```
 
+`bedrock_agent.py` — a real boto3 client against a mock Bedrock endpoint, so
+it costs nothing and needs no account. Record it, then replay it: the second
+call streams `application/vnd.amazon.eventstream`, and the six binary frames
+come back frame for frame rather than as one coalesced blob. Before the
+`urllib3` shim existed this script recorded **nothing at all** — botocore is
+below every other seam — which is the clearest demonstration of what M10 was
+for.
+
 `truncation_bug.py` — the README's demo, and the shortest path to understanding
 why `--context --diff` exists.
 
-Both mock-backed examples bind a fixed port (`REELTIME_DEMO_PORT`,
-`LANGCHAIN_EXAMPLE_PORT`) because the request URL is part of what replay matches
+The mock-backed examples bind a fixed port (`REELTIME_DEMO_PORT`,
+`LANGCHAIN_EXAMPLE_PORT`, `BEDROCK_EXAMPLE_PORT`) because the request URL is part of what replay matches
 on — an ephemeral port would differ between record and replay and every event
 would report as drifted.

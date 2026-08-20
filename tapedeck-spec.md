@@ -346,9 +346,11 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 | **6** | Alignment-based diff, divergence-point reporting first | `tape diff` ✅ |
 | **7** | `tape doctor` | Nondeterminism detection ✅ |
 | **9** | LangChain adapter, remaining framework coverage | Framework coverage ✅ |
-| **10** | `urllib3` interception — Bedrock/boto3, streaming included | Closes the last uncovered HTTP stack ← next |
-| **11** | Web UI | `tape ui` |
+| **10** | `urllib3` interception — Bedrock/boto3, streaming included | Closes the last uncovered HTTP stack ✅ |
+| **11** | Web UI | `tape ui` ← next |
 | **12** | Overhead benchmarks, docs site, examples dir | v1.0 |
+| **13** | Fork patches at the `requests` and `urllib3` seams | The grammar means the same thing at every seam |
+| **14** | Re-runnable Bedrock pricing check | `pricing.py` verified by a command, not by reading |
 
 **Resequenced 2026-08-17 after the AgentTape analysis** (`COMPETITIVE.md`). Streaming capture moved from M9 into M2 and streaming replay into M3, because the closest competitor cannot record streams at all and most production agents use them. MCP moved from M9 to M5.5, because AgentTape ships an `mcp` extra with no code behind it and that lead will not last. The web UI moved from M8 to last, because a viewer is the most expensive thing in the plan and the least differentiating now that a competitor ships one — v1.0 no longer waits on it.
 
@@ -398,6 +400,17 @@ A section titled **"What this can't replay"** in the README. Being precise about
   warns once. `boto3`/Bedrock is on `urllib3` and is the largest remaining gap;
   WebSockets and gRPC have no request/response boundary to sit under. See
   `STATUS.md`, "The framework audit".)*
+
+  *(Amended 2026-08-20, M10: the `urllib3` half is **done**. `boto3`/`botocore`
+  — and so Bedrock — record and replay through a shim on
+  `HTTPConnectionPool.urlopen`, streaming included: Bedrock's binary
+  `application/vnd.amazon.eventstream` framing is captured frame for frame. A
+  `requests` call over the same seam is still one event, not two, because the
+  M1 boundary rule already covered it. aiohttp, WebSockets and gRPC are
+  unchanged. One consequence is new and is a limitation in its own right:
+  botocore signs before reeltime's seam sees the request, so `--patch` fields
+  that rewrite a request are **refused** on a signed event, while
+  `--patch llm.response=` works. See `STATUS.md`, "Forking below a signer".)*
 
 ---
 
