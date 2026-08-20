@@ -207,6 +207,52 @@ def read_body(body: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def substitute_text(body: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """``body`` with its answer replaced by ``text``, in its own family's shape.
+
+    The inverse of :func:`read_body`, and it exists for ``--patch
+    llm.response=``. A fork substituting a completion has to hand the agent
+    something the agent can *parse*: Bedrock is one endpoint in front of
+    families that agree on nothing, so a generic OpenAI-shaped body -- which is
+    what the httpx shim fabricates -- would make a Titan agent raise `KeyError`
+    on `results` instead of showing what it does with the new answer.
+
+    So the recorded parent response is rewritten in place rather than replaced.
+    That keeps the family, the field names, and every key the decoder does not
+    read, and it means a family added to `read_body` later fails visibly here
+    (the text is unchanged) rather than silently returning a wrong shape.
+    """
+    body = json.loads(json.dumps(body))  # deep copy; the parent is not ours
+
+    usage = body.get("usage")
+    if isinstance(usage, dict):
+        # Anthropic-on-Bedrock, Nova, and the Converse API. Whichever content
+        # list is present is the one carrying the answer.
+        for holder in (body, (body.get("output") or {}).get("message") or {}):
+            content = holder.get("content")
+            if isinstance(content, list):
+                blocks = [b for b in content
+                          if isinstance(b, dict) and isinstance(b.get("text"), str)]
+                if blocks:
+                    # The first block carries the whole answer; the rest go,
+                    # because leaving them would append the original text.
+                    holder["content"] = [dict(blocks[0], text=text)]
+                    return body
+        return body
+
+    if "inputTextTokenCount" in body:
+        results = body.get("results") or []
+        first = results[0] if results and isinstance(results[0], dict) else {}
+        body["results"] = [dict(first, outputText=text)]
+        return body
+
+    if "generation" in body:
+        body["generation"] = text
+        return body
+
+    return body
+
+
 def read_stream(payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Tokens and a preview from a decoded event stream.
 

@@ -88,6 +88,31 @@ def missing_credentials(trace: Trace, fork_at: int) -> List[Tuple[str, str]]:
     return sorted(needed.items())
 
 
+def is_signed_request(event: Event) -> bool:
+    """True if the recorded request was AWS SigV4-signed before it was sent.
+
+    botocore signs, then hands the result to ``urllib3`` -- which is where
+    reeltime's seam is. So a fork that rewrites the request at that seam
+    changes bytes the signature already covers, and AWS rejects the result.
+    See :func:`check_patches` for what is done about it.
+
+    Detected from the header *names*, which is what a trace still has: the
+    redactor drops ``Authorization``'s value by name before anything reaches
+    disk, so the value cannot be inspected and does not need to be. An
+    ``Authorization`` header beside any ``x-amz-*`` is botocore's signature and
+    nothing else's.
+    """
+    headers = (event.req or {}).get("headers")
+    if not isinstance(headers, list):
+        return False
+    names = set()
+    for pair in headers:
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            names.add(str(pair[0]).lower())
+    return "authorization" in names and any(
+        name.startswith("x-amz-") for name in names)
+
+
 def check_patches(patches: Sequence[Patch], trace: Trace, fork_at: int) -> None:
     """Refuse a patch that cannot apply to the event it names.
 
@@ -103,16 +128,32 @@ def check_patches(patches: Sequence[Patch], trace: Trace, fork_at: int) -> None:
             "event for --patch to apply to".format(fork_at, trace.run_id, len(trace.events))
         )
     name = target.req.get("name") if isinstance(target.req.get("name"), str) else None
+    signed = is_signed_request(target)
     for patch in patches:
-        if patch.matches(target.kind, name):
-            continue
-        raise TapeConfigError(
-            "patch {!r} does not apply to event {}, which is a {} event{}. "
-            "`tape show {} {}` shows what is there.".format(
-                patch.describe(), fork_at, target.kind,
-                " for {!r}".format(name) if name else "",
-                trace.run_id[:14], fork_at)
-        )
+        if not patch.matches(target.kind, name):
+            raise TapeConfigError(
+                "patch {!r} does not apply to event {}, which is a {} event{}. "
+                "`tape show {} {}` shows what is there.".format(
+                    patch.describe(), fork_at, target.kind,
+                    " for {!r}".format(name) if name else "",
+                    trace.run_id[:14], fork_at)
+            )
+        if signed and not patch.substitutes_result:
+            # Refused rather than attempted, because attempting it fails in the
+            # least useful possible way: the request is signed before it
+            # reaches reeltime's seam, SigV4 covers the URI path and a hash of
+            # the body, and AWS answers `SignatureDoesNotMatch` -- an error
+            # about credentials, for what is really an unsupported patch.
+            raise TapeConfigError(
+                "patch {!r} cannot be applied to event {}: the request was "
+                "signed (AWS SigV4) before reeltime saw it, and the signature "
+                "covers the URL and the request body -- so rewriting either "
+                "would be rejected as a bad signature rather than run.\n"
+                "  Patch the result instead: --patch 'llm.response=\"...\"' "
+                "substitutes the completion without sending anything, which "
+                "is what a signed request leaves available.".format(
+                    patch.describe(), fork_at)
+            )
 
 
 def _recorded_result(event: Optional[Event], kind: str) -> Any:

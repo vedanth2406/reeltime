@@ -39,6 +39,10 @@ class Decoder(NamedTuple):
     decode: Callable[[Event], Optional[Dict[str, Any]]]
     #: Optional: extract the message array for ``tape show --context``.
     context: Optional[Callable[[Event], Optional[Dict[str, Any]]]] = None
+    #: Optional: rewrite a recorded response body to carry new answer text,
+    #: for ``--patch llm.response=``. Provider knowledge belongs here rather
+    #: than in a shim -- see :func:`substituted_body`.
+    substitute: Optional[Callable[[Dict[str, Any], str], Dict[str, Any]]] = None
 
 
 REGISTRY: List[Decoder] = [
@@ -47,7 +51,8 @@ REGISTRY: List[Decoder] = [
     # Bedrock last of the three: its `matches` is a host check, so it can never
     # claim a first-party call, but ordering it after the shapes it wraps keeps
     # the cheap discriminators first.
-    Decoder(bedrock.NAME, bedrock.matches, bedrock.decode),
+    Decoder(bedrock.NAME, bedrock.matches, bedrock.decode,
+            substitute=bedrock.substitute_text),
 ]
 
 
@@ -109,6 +114,41 @@ def context_of(event: Event) -> Optional[Dict[str, Any]]:
     return None
 
 
+def substituted_body(event: Event, text: str,
+                     res: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """``event``'s recorded response body, rewritten to say ``text``.
+
+    ``--patch llm.response=`` has to hand the agent a body the agent can parse,
+    and what "parseable" means is a provider question -- so it is answered
+    here, beside the code that knows how to read each shape, rather than in a
+    transport shim that is required to know no providers at all (principle 5).
+
+    ``res`` is the event's response payload with any blob references already
+    resolved. A recorded response large enough to have been externalised is a
+    ``blob:`` string on the event itself, so reading ``event.res`` directly
+    would find no JSON and silently fall back to the generic shape -- for
+    exactly the long completions a fork is most likely to be patching.
+
+    Returns ``None`` when no decoder claims the event or the one that does has
+    no ``substitute``. The caller then falls back to its own generic shape,
+    which is the right answer for an unrecognised provider and the wrong one
+    for Bedrock, where the families disagree about where the text even lives.
+    """
+    if not isinstance(text, str):
+        return None
+    for decoder in REGISTRY:
+        if decoder.substitute is None or not decoder.matches(event):
+            continue
+        body = res if isinstance(res, dict) else (
+            event.res if isinstance(event.res, dict) else None)
+        parsed = (body or {}).get("body")
+        parsed = parsed.get("json") if isinstance(parsed, dict) else None
+        if not isinstance(parsed, dict):
+            return None
+        return decoder.substitute(parsed, text)
+    return None
+
+
 def decode_resolved(event: Event, blobs: Any) -> Optional[Dict[str, Any]]:
     """Decode an event read back from disk, resolving its blob references.
 
@@ -132,4 +172,4 @@ def decode_resolved(event: Event, blobs: Any) -> Optional[Dict[str, Any]]:
 
 
 __all__ = ["Decoder", "REGISTRY", "apply", "context_of", "decode",
-           "decode_resolved", "register"]
+           "decode_resolved", "register", "substituted_body"]

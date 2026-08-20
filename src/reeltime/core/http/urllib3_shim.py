@@ -35,9 +35,11 @@ one per attempt. There is a regression test pinning it.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from .. import _originals, callsite
+from .. import decoders
 from ..recorder import boundary, in_boundary
 from . import common, replay as replay_support
 
@@ -265,6 +267,57 @@ def _replayed_response(engine: Any, event: Any, module: Any, pool: Any,
     )
 
 
+def _substituted_bytes(engine: Any, value: Any) -> bytes:
+    """The body a substituted completion should carry, in the right shape."""
+    text = value if isinstance(value, str) else json.dumps(value)
+    event = getattr(engine, "boundary_event", None)
+    body = None
+    if event is not None:
+        body = decoders.substituted_body(
+            event, text, res=engine.resolved(event, event.res))
+    if body is None:
+        # No decoder claimed it, so there is no known shape to preserve and
+        # inventing one would only be wrong more elaborately.
+        body = {"output": text}
+    return json.dumps(body).encode("utf-8")
+
+
+def _substituted_response(module: Any, pool: Any, method: str, url: str,
+                          raw: bytes) -> Any:
+    """A response carrying a patched completion, with nothing sent.
+
+    **This is the only fork patch that can work at this seam, and the reason is
+    the signature.** botocore signs the request before it reaches ``urlopen``,
+    and SigV4 covers the URI path and a hash of the payload -- so rewriting a
+    model id (which lives in the path, not the body) or a request body *here*
+    produces bytes that no longer match the ``Authorization`` header sitting
+    beside them, and AWS answers 403. Those patches are refused up front by
+    :func:`reeltime.core.fork.check_patches` rather than sent and lost.
+
+    Substituting the *result* has no such problem: the request is never sent,
+    so there is nothing left to be signed. The body is built from the parent
+    event's recorded response so the agent gets its own family's shape back --
+    a Titan caller reads ``results[0].outputText`` and would raise on the
+    OpenAI-shaped body the httpx shim fabricates.
+    """
+    from urllib3._collections import HTTPHeaderDict
+
+    headers = HTTPHeaderDict()
+    headers.add("content-type", "application/json")
+    headers.add("content-length", str(len(raw)))
+    return module.HTTPResponse(
+        body=_ReplayedBody([raw], []),
+        headers=headers,
+        status=200,
+        version=11,
+        reason="OK",
+        preload_content=False,
+        decode_content=False,
+        request_method=str(method).upper(),
+        request_url=absolute_url(pool, str(url)),
+    )
+
+
 class Urllib3Shim:
     """Patches ``HTTPConnectionPool.urlopen``."""
 
@@ -298,6 +351,26 @@ class Urllib3Shim:
                                               method, url)
                 return original(pool, method, url, body=body, headers=headers,
                                 **kwargs)
+
+            if getattr(engine, "forking", False):
+                substituted, value = engine.substitute("llm")
+                if substituted:
+                    # A patched completion: nothing goes out, and the event is
+                    # recorded as though it had. Below a signer this is the
+                    # only patch that can work -- see _substituted_response.
+                    raw = _substituted_bytes(engine, value)
+                    response = _substituted_response(urllib3, pool, method,
+                                                     url, raw)
+                    engine.record(
+                        "http", payload,
+                        _response_payload(engine, response.status,
+                                          response.headers, [raw]),
+                        site=site,
+                        t_rel=started - engine.t0,
+                        dur_ms=(_originals.perf_counter() - started) * 1000.0,
+                        meta={"patched": True},
+                    )
+                    return response
 
             try:
                 with boundary():

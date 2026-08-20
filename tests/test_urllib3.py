@@ -21,15 +21,17 @@ under test.
 import json
 import os
 import threading
+from urllib.parse import quote
 
 import pytest
 import requests
 import urllib3
 
 import reeltime as tape
-from reeltime.core import aws
+from reeltime.core import aws, fork
 from reeltime.core.http import common, urllib3_shim
 from reeltime.core.trace import Event
+from reeltime.errors import TapeConfigError
 
 try:
     import boto3
@@ -768,3 +770,203 @@ def test_the_shim_declines_cleanly_when_urllib3_is_missing(monkeypatch, tape_dir
     shim = urllib3_shim.Urllib3Shim(engine=None)
     assert shim.install() is False
     shim.uninstall()          # and cleans up nothing, without complaining
+
+
+# -- forking below a signer ----------------------------------------------
+#
+# The fork grammar was written against the httpx seam, where reeltime sees the
+# request before anyone has committed to its bytes. This seam is different in a
+# way that is not a detail: **botocore signs, then calls `urlopen`**, so by the
+# time the shim sees a Bedrock request there is an `Authorization` header
+# beside it that covers the URL and a hash of the body.
+#
+# Rewriting either therefore cannot work here, and the failure mode if it were
+# attempted is the bad kind -- AWS answers `SignatureDoesNotMatch`, an error
+# about credentials, for what is really an unsupported patch. So those patches
+# are refused before the fork starts, and the one that *can* work below a
+# signer -- substituting the result, which sends nothing at all -- is
+# implemented.
+
+
+CLAUDE_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+#: botocore percent-encodes the colon in a versioned model id, so the mock
+#: has to be routed on the encoded spelling -- the same one the decoder
+#: unquotes back out of the path.
+CLAUDE_PATH = "/model/{}/invoke".format(quote(CLAUDE_MODEL, safe=""))
+CLAUDE_BODY = {
+    "id": "msg_01", "type": "message", "role": "assistant",
+    "model": CLAUDE_MODEL, "stop_reason": "end_turn",
+    "content": [{"type": "text", "text": "A tape you can rewind."}],
+    "usage": {"input_tokens": 137, "output_tokens": 6},
+}
+
+
+def bedrock_agent(server, model=TITAN_MODEL, body=None):
+    def go():
+        client = bedrock_client(server.base_url, **FAKE_CREDENTIALS)
+        response = client.invoke_model(
+            modelId=model, body=json.dumps(body or {"inputText": "hi"}))
+        return json.loads(response["body"].read())
+
+    return go
+
+
+def _fork(tape_dir, fn, patches, at=0, parent="01REC", run_id="01FORK"):
+    from reeltime.core.patch import parse_all
+
+    run = tape.install("fork", tape_dir=tape_dir, collect_git=False, replay=parent,
+                       fork_at=at, run_id=run_id, patches=parse_all(list(patches)))
+    try:
+        return fn(), run
+    finally:
+        if not run.closed:
+            tape.uninstall()
+
+
+def test_a_signed_request_is_recognised_as_signed(tape_dir, server):
+    """From the header *names*, which is all a trace keeps.
+
+    The redactor drops `Authorization`'s value before it reaches disk, so the
+    signature itself is not there to inspect -- and does not need to be. An
+    `Authorization` beside any `x-amz-*` is botocore's and nobody else's.
+    """
+    server.route(TITAN_PATH, json=TITAN_BODY)
+    with tape.session(tape_dir=tape_dir, collect_git=False) as run:
+        bedrock_agent(server)()
+
+    event = tape.read_trace(run.path).events[0]
+    assert fork.is_signed_request(event) is True
+    # And the value really is gone, so this could not have read it.
+    values = [v for k, v in event.req["headers"] if k.lower() == "authorization"]
+    assert values == ["<redacted>"]
+
+
+def test_a_plain_call_is_not_mistaken_for_a_signed_one(recording, server):
+    pool_request(server.route("/plain", json={"ok": True}))
+    tape.uninstall()
+
+    event = tape.read_trace(recording.path).events[0]
+    assert fork.is_signed_request(event) is False
+
+
+def test_a_request_rewriting_patch_is_refused_on_a_signed_event(tape_dir, server):
+    """Refused before the fork runs, and told why.
+
+    `llm.model` is the sharpest case: on Bedrock the model id is not in the
+    body at all, it is a path segment -- and the path is exactly what SigV4
+    signs. Attempting it would send a request AWS rejects for a reason that
+    says nothing about patches.
+    """
+    from reeltime.core.patch import parse_all
+
+    server.route(TITAN_PATH, json=TITAN_BODY)
+    with tape.session(tape_dir=tape_dir, collect_git=False) as run:
+        bedrock_agent(server)()
+    trace = tape.read_trace(run.path)
+
+    for expression in ("llm.model=amazon.titan-text-express-v1",
+                       'llm.system="be brief"',
+                       "llm.temperature=0",
+                       'http.url="http://elsewhere/"'):
+        with pytest.raises(TapeConfigError) as caught:
+            fork.check_patches(parse_all([expression]), trace, 0)
+        message = str(caught.value)
+        assert "signed" in message and "SigV4" in message
+        # It must name the thing that does work, or it is only a complaint.
+        assert "llm.response=" in message
+
+
+def test_a_result_substitution_is_allowed_on_a_signed_event(tape_dir, server):
+    """The one that works below a signer, because nothing is sent."""
+    from reeltime.core.patch import parse_all
+
+    server.route(TITAN_PATH, json=TITAN_BODY)
+    with tape.session(tape_dir=tape_dir, collect_git=False) as run:
+        bedrock_agent(server)()
+
+    fork.check_patches(parse_all(['llm.response="anything"']),
+                       tape.read_trace(run.path), 0)      # does not raise
+
+
+def test_a_substituted_completion_sends_nothing_and_is_recorded(tape_dir, server):
+    """The agent gets the patched answer and the network is never touched.
+
+    Both halves matter. Substituting without recording would leave a fork whose
+    trace cannot be replayed or forked again, which is what `consume` copying
+    replayed events across exists to prevent on the other side of the fork.
+    """
+    server.route(TITAN_PATH, json=TITAN_BODY)
+    record(tape_dir, bedrock_agent(server))
+    server.received.clear()
+
+    result, run = _fork(tape_dir, bedrock_agent(server),
+                        ['llm.response="PATCHED"'])
+
+    assert result["results"][0]["outputText"] == "PATCHED"
+    assert server.received == []                  # nothing was sent
+    trace = tape.read_trace(run.path)
+    assert trace.footer["patched"] == ['llm.response="PATCHED"']
+    assert trace.events[0].meta["patched"] is True
+
+
+def test_a_substituted_completion_keeps_its_familys_shape(tape_dir, server):
+    """Titan reads `results[0].outputText`; Claude reads `content[0].text`.
+
+    This is why the substitution is built from the *parent's* recorded body
+    rather than from a fixed template. The httpx shim can fabricate an
+    OpenAI-shaped body because its providers agree on one; Bedrock is one
+    endpoint in front of families that agree on nothing, so a generic body
+    would make a Titan agent raise `KeyError` instead of showing what it does
+    with a different answer.
+    """
+    server.route(TITAN_PATH, json=TITAN_BODY)
+    server.route(CLAUDE_PATH, json=CLAUDE_BODY)
+
+    record(tape_dir, bedrock_agent(server), run_id="01TITAN")
+    titan, _ = _fork(tape_dir, bedrock_agent(server), ['llm.response="T"'],
+                     parent="01TITAN", run_id="01FT")
+    # Every key the decoder does not read survives untouched.
+    assert titan["results"][0]["outputText"] == "T"
+    assert titan["results"][0]["completionReason"] == "FINISH"
+    assert titan["inputTextTokenCount"] == 11
+
+    claude_agent = bedrock_agent(server, model=CLAUDE_MODEL,
+                                 body={"messages": [{"role": "user", "content": "hi"}]})
+    record(tape_dir, claude_agent, run_id="01CLAUDE")
+    claude, _ = _fork(tape_dir, claude_agent, ['llm.response="C"'],
+                      parent="01CLAUDE", run_id="01FC")
+    assert claude["content"][0]["text"] == "C"
+    assert claude["content"][0]["type"] == "text"     # the block is rewritten,
+    assert claude["usage"] == {"input_tokens": 137, "output_tokens": 6}  # not replaced
+
+
+def test_a_substituted_completion_replays(tape_dir, server):
+    """A fork is a run in its own right, so its patched event must replay."""
+    server.route(TITAN_PATH, json=TITAN_BODY)
+    record(tape_dir, bedrock_agent(server))
+    _fork(tape_dir, bedrock_agent(server), ['llm.response="PATCHED"'])
+    server.received.clear()
+
+    replayed, summary = replay(tape_dir, bedrock_agent(server), run_id="01FORK")
+    assert replayed["results"][0]["outputText"] == "PATCHED"
+    assert server.received == []
+    assert summary.events == 1
+
+
+def test_an_unrecognised_provider_falls_back_rather_than_inventing_a_shape(
+        recording, server):
+    """No decoder claims it, so there is no family shape to preserve.
+
+    `{"output": text}` is a guess either way; what matters is that it is a
+    *visible* guess rather than an OpenAI body pretending to be this provider's.
+    """
+    from reeltime.core.http import urllib3_shim as shim
+
+    class Engine:
+        boundary_event = None
+
+        @staticmethod
+        def resolved(event, payload):
+            return payload
+
+    assert json.loads(shim._substituted_bytes(Engine(), "hello")) == {"output": "hello"}
