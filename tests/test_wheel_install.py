@@ -168,3 +168,39 @@ def test_the_wheel_ships_the_bootstrap_shim(wheel):
     # says so only by producing an empty trace.
     assert "reeltime/_bootstrap/sitecustomize.py" in names
     assert "reeltime/py.typed" in names
+
+
+def test_the_wheel_ships_every_module_in_the_source_tree(wheel):
+    """No module is in the tree but missing from the artifact.
+
+    The test above names two files by hand, which covers the two whose absence
+    is catastrophic and nothing else. That is the wrong shape for this: the
+    failure it guards against is a *packaging* change silently dropping a
+    module, and which module gets dropped is exactly the part nobody can
+    predict in advance.
+
+    M9 added three modules to the wheel and M10 added three more
+    (``core/http/urllib3_shim.py``, ``core/aws.py``,
+    ``core/decoders/bedrock.py``). Every one of them installs conditionally --
+    the shim only patches if ``urllib3`` is importable, the decoder only fires
+    on a matching response -- so a wheel missing any of them does not fail on
+    import. It records fewer events, which is the failure mode this whole
+    project exists to make impossible.
+
+    So the list is read off the source tree rather than written down here, and
+    a module added later is covered by having been added rather than by being
+    remembered.
+    """
+    import zipfile
+
+    source = REPO / "src" / "reeltime"
+    expected = sorted(
+        path.relative_to(source.parent).as_posix()
+        for path in source.rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
+    assert len(expected) > 40, "the glob stopped matching the source tree"
+
+    shipped = set(zipfile.ZipFile(wheel).namelist())
+    missing = [name for name in expected if name not in shipped]
+    assert not missing, "in the source tree but not in the wheel: {}".format(missing)
