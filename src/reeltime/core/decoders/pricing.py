@@ -7,10 +7,21 @@ something a user can correct with a pull request without reading any code.
 
 * https://developers.openai.com/api/docs/pricing — checked **2026-08-18**
 * https://platform.claude.com/docs/en/about-claude/pricing — checked **2026-08-18**
-* https://aws.amazon.com/bedrock/pricing/ — checked **2026-08-19**, and only
-  partly: that page renders its current-model tables client-side, so only the
-  rows still present in the served HTML could be verified. The Bedrock section
-  below carries what was actually read and nothing else.
+* https://aws.amazon.com/bedrock/pricing/ — checked **2026-08-20**. That page
+  still renders its current-model tables client-side, so it remains unusable
+  as a source for anything not in the served HTML.
+* **AWS Price List Query API** — checked **2026-08-20**, and the source for
+  every Bedrock row below. Public, unauthenticated, and machine-readable, which
+  is what the pricing page is not:
+
+      https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/region_index.json
+      https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/<region>/index.json
+
+  A SKU's ``usagetype`` is what disambiguates a rate: ``USE1-NovaLite-input-tokens``
+  is the base on-demand price, while ``-batch``, ``-custom-model`` and
+  ``-cross-region-global`` are different products at different rates. Reading a
+  model's "price" without filtering on that is how you get a number that is
+  half or 1.1x the real one.
 
 Entries are USD per **one million** tokens, ``(input, output)``, at base rates.
 Batch (50% off), prompt-caching multipliers, fast mode, and the US data
@@ -28,7 +39,7 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 #: The date the tables below were last checked against the pages above.
-CHECKED = "2026-08-18"
+CHECKED = "2026-08-20"
 
 #: model prefix -> (USD per 1M input tokens, USD per 1M output tokens)
 #:
@@ -78,26 +89,72 @@ PRICES: Dict[str, Tuple[float, float]] = {
     #
     # Bedrock model ids are their own namespace (`anthropic.claude-…`,
     # `amazon.nova-…`), so they cannot borrow the rows above -- and must not.
-    # **Bedrock does not charge the first-party price for the same model**:
-    # Claude 3.5 Sonnet is $3.00/$15.00 direct from Anthropic and $6.00/$30.00
-    # on Bedrock. Aliasing one to the other would have produced a confidently
-    # wrong number, which is the failure this whole file is arranged to avoid.
+    # **Bedrock is a separate price list for the same models**, so aliasing
+    # `anthropic.claude-…` to the `claude-…` row above is the obvious shortcut
+    # and produces a confidently wrong number. A Bedrock id that is not in this
+    # section therefore resolves to no price at all rather than falling through
+    # to the first-party one -- there is a test asserting exactly that.
     #
-    # Only rows verified against the pricing page are here. The current-model
-    # tables on that page are rendered client-side, so anything not listed
-    # below could not be checked and is deliberately absent: an unpriced model
-    # reports `cost_usd: null`, which is honest, where a guess would not be.
-    # **Titan and Nova token counts populate; their costs do not yet.**
-    "anthropic.claude-3-5-sonnet": (6.00, 30.00),
+    # Every row here is the **base on-demand rate in a US region**, read from
+    # the Price List Query API and filtered to the plain `-input-tokens` /
+    # `-output-tokens` usagetype. Rates are *not* uniform worldwide: the same
+    # Nova Lite is $0.06/$0.24 in us-east-1 and us-west-2 and $0.078/$0.312 in
+    # eu-central-1. A trace records a URL, not a bill, so US is the stated
+    # basis and a non-US run is an underestimate rather than a guess.
+    #
+    # -- Amazon Nova (first generation) ---------------------------------
+    # Verified 2026-08-20 against us-east-1 and us-west-2, which agree
+    # exactly. Unambiguous because these models have a single in-region SKU:
+    # no `-cross-region-global` variant exists for them, unlike Nova 2.0.
+    "amazon.nova-micro": (0.035, 0.14),
+    "amazon.nova-lite": (0.06, 0.24),
+    "amazon.nova-pro": (0.80, 3.20),
+    "amazon.nova-premier": (2.50, 12.50),
+    #
+    # **Nova 2.0 is deliberately absent**, for the same reason as Claude
+    # below: `amazon.nova-2-lite-v1:0` is sold at $0.30/$2.50 per 1M through a
+    # global cross-region profile and $0.33/$2.75 in-region — so one rate per
+    # model id would be wrong, not merely incomplete. Its ids start
+    # `amazon.nova-2-`, which does not prefix-match the rows above; that is
+    # checked by a test rather than left to be noticed.
+    #
+    # -- Anthropic on Bedrock -------------------------------------------
+    # Legacy, in-region-only models with a single unambiguous SKU each, both
+    # re-verified 2026-08-20 against the Price List API.
     "anthropic.claude-instant": (0.80, 4.00),
     "anthropic.claude-v2:1": (8.00, 40.00),
+    #
+    # **Claude 3.5 Sonnet and newer are deliberately absent.** They are not
+    # sold as in-region SKUs at all — they are served through cross-region
+    # inference profiles, and the rate depends on which routing tier the
+    # profile used: global vs geo vs in-region. Nothing in a recorded request
+    # says which one answered it, so a single rate per model id would be
+    # *wrong* rather than incomplete, and this table's whole discipline is
+    # that a missing number is safer than a confident wrong one. Tokens still
+    # populate; `cost_usd` stays null.
+    #
+    # This is also why `global.` is **not** in BEDROCK_REGION_PREFIXES below.
+    #
+    # -- Amazon Titan ---------------------------------------------------
     "amazon.titan-text-lite": (0.30, 0.40),
 }
 
 #: Cross-region inference profiles prefix the model id with a geography, so
-#: ``us.anthropic.claude-…`` and ``anthropic.claude-…`` are the same model at
-#: the same price. Stripped before lookup rather than duplicated into the table
-#: three times per row.
+#: ``us.anthropic.claude-…`` and ``anthropic.claude-…`` are the same model.
+#: Stripped before lookup rather than duplicated into the table once per
+#: geography.
+#:
+#: **``global.`` is deliberately not in this list.** It looks like one more
+#: geography and is not: a global profile is a different *routing tier* at a
+#: different rate (Nova 2.0 Lite is $0.30/1M global against $0.33/1M
+#: in-region), so stripping it would silently price a global call at the
+#: in-region rate. Left unstripped, ``global.amazon.nova-lite-v1:0`` matches
+#: nothing and reports no cost, which is the honest answer.
+#:
+#: The geographies below are a real simplification too — a ``eu.`` profile is
+#: genuinely more expensive than a ``us.`` one — and the table is US-based, so
+#: a European run is under-reported. Stated in the module docstring rather than
+#: silently absorbed.
 BEDROCK_REGION_PREFIXES = ("us.", "eu.", "apac.", "us-gov.")
 
 

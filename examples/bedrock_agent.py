@@ -35,6 +35,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import boto3
 
 PORT = int(os.environ.get("BEDROCK_EXAMPLE_PORT", "8424"))
+#: Claude-on-Bedrock. Recorded with token counts and **no cost**: models served
+#: through cross-region inference profiles are billed at a rate that depends on
+#: the routing tier (global vs geo vs in-region), and nothing in the request
+#: says which one answered -- so `core/decoders/pricing.py` carries no row and
+#: reports null rather than a confident guess. An `amazon.nova-*` model here
+#: would populate `cost_usd` instead.
 MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 
 #: Real streams arrive as separate reads. Without a gap the writes

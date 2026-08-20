@@ -354,40 +354,70 @@ def test_a_streamed_call_is_decoded_from_its_recorded_chunks():
     assert out["res"]["preview"] == "A tape you can rewind."
 
 
-def test_bedrock_is_priced_as_bedrock_not_as_the_first_party_model():
+def test_a_bedrock_id_never_falls_through_to_the_first_party_row():
     """The shortcut this table exists to refuse.
 
-    Claude 3.5 Sonnet is $3.00/$15.00 direct from Anthropic and $6.00/$30.00
-    on Bedrock. Aliasing the Bedrock id to the first-party row is the obvious
-    saving and produces a confidently wrong number in someone's cost report.
+    Bedrock is a separate price list for the same models, so an
+    `anthropic.claude-…` id must never resolve to the `claude-…` row. Claude
+    3.5 Sonnet is the sharpest case: it is priced first-party and carries **no
+    Bedrock row at all**, so if the namespaces were ever collapsed this would
+    start returning a number instead of nothing.
     """
-    assert pricing.lookup("anthropic.claude-3-5-sonnet") == (6.00, 30.00)
     assert pricing.lookup("claude-3-5-sonnet") == (3.00, 15.00)
+    assert pricing.lookup("anthropic.claude-3-5-sonnet") is None
+    assert pricing.lookup(CLAUDE) is None
 
-    out = bedrock.decode(event_for(CLAUDE, body=ANTHROPIC_BODY))
-    # 137 in at $6/M, 6 out at $30/M.
+
+def test_nova_is_priced_from_its_own_row():
+    # Read off the Price List Query API, us-east-1 and us-west-2 agreeing.
+    assert pricing.lookup("amazon.nova-lite-v1:0") == (0.06, 0.24)
+    assert pricing.lookup("amazon.nova-micro-v1:0") == (0.035, 0.14)
+    assert pricing.lookup("amazon.nova-pro-v1:0") == (0.80, 3.20)
+    assert pricing.lookup("amazon.nova-premier-v1:0") == (2.50, 12.50)
+
+    out = bedrock.decode(event_for(NOVA, body=NOVA_BODY))
+    # 137 in at $0.06/M, 6 out at $0.24/M.
     assert out["meta"]["cost_usd"] == pytest.approx(
-        137 / 1e6 * 6.00 + 6 / 1e6 * 30.00)
+        137 / 1e6 * 0.06 + 6 / 1e6 * 0.24)
 
 
-def test_a_cross_region_inference_profile_resolves_to_the_same_price():
-    # `us.anthropic.claude-…` is the same model in the same table, and the
-    # geography is stripped rather than duplicated into a row per region.
-    assert (pricing.lookup("us." + CLAUDE) == pricing.lookup(CLAUDE)
-            == (6.00, 30.00))
+def test_nova_2_does_not_borrow_the_first_generation_price():
+    """The prefix matcher makes this a real risk, so it is pinned.
+
+    `amazon.nova-2-lite-v1:0` is a different price at a different routing tier
+    ($0.30/1M global against $0.33/1M in-region), which is why it has no row.
+    Had the first-generation rows been spelled `amazon.nova-` instead of
+    `amazon.nova-lite`, longest-prefix matching would have silently priced
+    every Nova 2.0 call at the older, cheaper rate.
+    """
+    for model in ("amazon.nova-2-lite-v1:0", "amazon.nova-2-pro-v1:0",
+                  "us.amazon.nova-2-lite-v1:0"):
+        assert pricing.lookup(model) is None, model
+
+
+def test_a_global_profile_is_not_treated_as_a_geography():
+    """`global.` changes the rate; `us.` and `eu.` do not change the model.
+
+    Stripping it the way a geography is stripped would price a global
+    cross-region call at the in-region rate -- a wrong number rather than a
+    missing one, which is the trade this file always makes the other way.
+    """
+    assert pricing.lookup("us.amazon.nova-lite-v1:0") == (0.06, 0.24)
+    assert pricing.lookup("global.amazon.nova-lite-v1:0") is None
 
 
 def test_an_unpriced_model_reports_tokens_and_no_cost():
     """Deliberately incomplete, and honest about it.
 
-    Only rows read off the pricing page are in the table -- the current-model
-    tables render client-side, so Nova's could not be verified. Tokens
-    populate, `cost_usd` stays absent, and nothing is inferred.
+    Claude-on-Bedrock from 3.5 Sonnet on is served through cross-region
+    inference profiles whose rate depends on the routing tier, and a recorded
+    request does not say which tier answered it. Tokens populate, `cost_usd`
+    stays absent, and nothing is inferred.
     """
-    out = bedrock.decode(event_for(NOVA, body=NOVA_BODY))
+    out = bedrock.decode(event_for(CLAUDE, body=ANTHROPIC_BODY))
     assert out["res"]["tokens"] == {"in": 137, "out": 6}
     assert "cost_usd" not in out["meta"]
-    assert pricing.lookup(NOVA) is None
+    assert pricing.lookup(CLAUDE) is None
 
 
 def test_a_body_the_decoder_cannot_read_still_produces_a_replayable_event():
