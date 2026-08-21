@@ -76,6 +76,9 @@ class ToolCall:
             text = text[: limit - 1] + "…"
         return "{}({})".format(self.name, text)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {"name": self.name, "args": self.args, "render": self.render()}
+
 
 @dataclass
 class Message:
@@ -126,6 +129,14 @@ class Message:
         return "{}:{}".format(self.role, hashlib.sha256(
             payload.encode("utf-8")).hexdigest()[:16])
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "index": self.index, "role": self.role, "text": self.text,
+            "tool_calls": [c.to_dict() for c in self.tool_calls],
+            "tool_name": self.tool_name, "images": self.images,
+            "hoisted": self.hoisted, "chars": self.chars, "shape": self.shape,
+        }
+
 
 @dataclass
 class Context:
@@ -147,6 +158,16 @@ class Context:
     @property
     def total_chars(self) -> int:
         return sum(m.chars for m in self.messages)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "event_index": self.event_index, "provider": self.provider,
+            "model": self.model, "messages": [m.to_dict() for m in self.messages],
+            "tools": list(self.tools), "params": self.params,
+            "completion": self.completion, "tokens": self.tokens,
+            "cost_usd": self.cost_usd, "site": self.site, "qual": self.qual,
+            "streamed": self.streamed, "total_chars": self.total_chars,
+        }
 
 
 # -- extraction ----------------------------------------------------------
@@ -379,6 +400,22 @@ class Change:
             return False
         return (self.before.text.startswith(self.after.text)
                 and len(self.after.text) < len(self.before.text))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The shape the UI renders.
+
+        ``truncated`` and ``kept_prefix`` are computed properties, not stored
+        fields, and they are the whole reason the context diff is worth looking
+        at -- so they are serialised explicitly rather than left to whatever a
+        generic dataclass dump would do with a property.
+        """
+        return {
+            "kind": self.kind,
+            "before": None if self.before is None else self.before.to_dict(),
+            "after": None if self.after is None else self.after.to_dict(),
+            "truncated": self.truncated,
+            "kept_prefix": self.kept_prefix,
+        }
 
 
 def diff(before: Context, after: Context) -> List[Change]:
