@@ -48,8 +48,16 @@ global.document = {
   title: '',
 };
 global.window = { addEventListener() {} };
-global.location = { pathname: '/run/' + P.run.summary.run_id };
-global.history = { pushState() {}, replaceState() {} };
+global.location = { pathname: '/run/' + P.run.summary.run_id, hash: '' };
+global.history = {
+  pushState() {},
+  /* The page keeps the URL describing what is on screen, so the stub has to
+   * behave like a URL bar or `syncHash` reads back `undefined`. */
+  replaceState(_s, _t, url) {
+    const at = String(url).indexOf('#');
+    global.location.hash = at < 0 ? '' : String(url).slice(at);
+  },
+};
 global.navigator = {};
 global.localStorage = { getItem: () => null, setItem() {} };
 global.fetch = function (path) {
@@ -141,6 +149,20 @@ check('contextIndices', () => {
 });
 check('moveBaseline', () => { S.view = 'diff'; moveBaseline(-1); });
 check('select, step, stepKind', () => { select(1); step(-1); step(1); stepKind(1); });
+check('the URL tracks the view', () => {
+  S.view = 'context'; select(P.run.events[0].i);
+  if (location.hash.indexOf('context/') < 0) {
+    throw new Error('hash did not follow the view: ' + location.hash);
+  }
+});
+check('a hash is applied on load', () => {
+  global.location.hash = '#diff/1/0';
+  applyHash();
+  if (S.view !== 'diff' || S.sel !== 1 || S.baseline !== 0) {
+    throw new Error('applyHash ignored the URL: ' + JSON.stringify(
+      {view: S.view, sel: S.sel, baseline: S.baseline}));
+  }
+});
 
 console.log(failures ? '\n' + failures + ' FAILURES' : '\nall render paths executed cleanly');
 process.exit(failures ? 1 : 0);

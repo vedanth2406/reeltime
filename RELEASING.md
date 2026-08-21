@@ -79,13 +79,24 @@ print('reeltime/_bootstrap/sitecustomize.py' in zipfile.ZipFile(w).namelist())"
 **Rebuild after any README edit.** PyPI renders the README once, at upload, and
 stores the result forever. A stale `dist/` ships a description you never read.
 
-The GIF is referenced by an absolute `raw.githubusercontent.com` URL. It must
-resolve *before* the first upload of a version, or fixing it costs a version
-bump:
+The README's images are referenced by absolute `raw.githubusercontent.com`
+URLs. They must resolve *before* the first upload of a version, or fixing them
+costs a version bump — which means **the release commit has to be pushed to
+GitHub before the PyPI upload**, not after:
 
 ```bash
-curl -sI https://raw.githubusercontent.com/vedanth2406/reeltime/main/demo.gif | head -1
+for asset in demo.gif ui.png; do
+  printf '%s  ' "$asset"
+  curl -sI "https://raw.githubusercontent.com/vedanth2406/reeltime/main/$asset" | head -1
+done
 ```
+
+Both are regenerable and cost nothing to re-record: `vhs demo.tape` for the
+terminal GIF, `./tools/capture_ui.sh` for the viewer screenshot. They are
+separate tools because vhs records a *terminal* and the viewer is a browser
+page; the capture script drives headless Chrome to a URL instead, which the
+viewer's location-hash deep links make possible without a browser-automation
+dependency.
 
 ## 4. TestPyPI, and look at it with your eyes
 
@@ -236,11 +247,24 @@ release you have not seen that line for.**
 ## 8. After
 
 ```bash
-uv venv /tmp/rt-live && VIRTUAL_ENV=/tmp/rt-live uv pip install reeltime
+uv venv /tmp/rt-live
+VIRTUAL_ENV=/tmp/rt-live uv pip install --refresh reeltime
 /tmp/rt-live/bin/tape --version
 ```
 
-Check <https://pypi.org/project/reeltime/> — the GIF, the tables, the links.
+**`--refresh` is not optional here, and leaving it off will lie to you.** `uv`
+caches its index, so an install run minutes after an upload happily resolves the
+*previous* version and reports success. On 0.6.0 this printed
+`reeltime 0.5.0` — with a `planned:` epilog from the older build, which is the
+only reason it was caught rather than being read as a pass. This is the same
+class of problem as TestPyPI's indexing lag in step 4, and it fails in the
+worse direction: not an error, but a wrong version reported as fine.
+
+If the version is still wrong with `--refresh`, wait and retry before believing
+it — PyPI's CDN takes a moment.
+
+Check <https://pypi.org/project/reeltime/> — the GIF, the screenshot, the
+tables, the links.
 
 ---
 

@@ -292,10 +292,14 @@ function drawTrack() {
 /* -- status bar -------------------------------------------------------- */
 function drawStatus() {
   var e = S.events.find(function (x) { return x.i === S.sel; });
-  $("pos").textContent = S.events.length ? "event " + S.sel + " of " + (S.events.length - 1) : "no events";
+  $("pos").textContent = S.events.length
+    ? "event " + S.sel + "  ·  " + S.events.length + " events"
+    : "no events";
   if (!e) { $("kind").textContent = ""; return; }
   $("kind").textContent = e.kind;
-  $("site").textContent = e.site || "";
+  var site = e.site || "";
+  $("site").textContent = site.replace(/^.*\//, "");
+  $("site").setAttribute("title", site);
   $("tsel").textContent = ms(e.dur_ms);
   var req = e.req || {}, res = e.res || {}, meta = e.meta || {};
   $("model").textContent = req.model || "";
@@ -330,7 +334,7 @@ function drawTabs() {
   });
 }
 
-function setView(v) { S.view = v; drawTabs(); render(); }
+function setView(v) { S.view = v; drawTabs(); syncHash(); render(); }
 
 function render() {
   var pane = $("pane");
@@ -639,12 +643,34 @@ function helpOverlay() {
 }
 
 /* -- navigation -------------------------------------------------------- */
+/* The URL always describes what is on screen: `#<view>/<event>/<baseline>`.
+   That makes a view linkable -- paste it to a colleague, or reopen where you
+   left off -- and it is what lets `tools/capture_ui.sh` drive a headless
+   browser straight to the frame the README shows, with no automation
+   dependency. */
+function syncHash() {
+  var h = S.view + "/" + S.sel + (S.baseline === null ? "" : "/" + S.baseline);
+  if (location.hash.slice(1) !== h) {
+    history.replaceState({}, "", location.pathname + "#" + h);
+  }
+}
+
+function applyHash() {
+  var parts = location.hash.slice(1).split("/");
+  if (!parts[0]) return false;
+  var views = VIEWS.map(function (v) { return v[0]; });
+  if (views.indexOf(parts[0]) >= 0) S.view = parts[0];
+  if (parts[1] !== undefined && parts[1] !== "") S.sel = parseInt(parts[1], 10);
+  if (parts[2] !== undefined && parts[2] !== "") S.baseline = parseInt(parts[2], 10);
+  return true;
+}
+
 function select(i) {
   if (!S.events.length) return;
   var ids = S.events.map(function (e) { return e.i; });
   if (ids.indexOf(i) < 0) return;
   S.sel = i;
-  drawTrack(); drawStatus();
+  drawTrack(); drawStatus(); syncHash();
   if (S.view === "raw" || S.view === "context" || S.view === "diff") render();
 }
 
@@ -676,6 +702,7 @@ function moveBaseline(delta) {
     var at = opts.indexOf(S.baseline);
     S.baseline = opts[Math.min(opts.length - 1, Math.max(0, at + delta))];
   }
+  syncHash();
   render();
 }
 
@@ -701,9 +728,15 @@ function load(runId) {
     S.sel = d.events.length ? d.events[0].i : 0;
     S.baseline = null;
     $("runid").textContent = d.summary.run_id;
-    $("argv").textContent = (d.summary.argv || []).join(" ");
+    var argv = (d.summary.argv || []).join(" ");
+    // Absolute paths are noise in a header and leak a home directory into any
+    // screenshot; the full command stays one hover away.
+    $("argv").textContent = argv.replace(/(^|\s)(\/\S+\/)/g, "$1");
+    $("argv").setAttribute("title", argv);
     document.title = "tape ui · " + d.summary.run_id;
-    drawTabs(); drawTrack(); drawStatus(); render();
+    applyHash();
+    if (S.view === "diff" && S.baseline === null) moveBaseline(0);
+    drawTabs(); drawTrack(); drawStatus(); syncHash(); render();
   }).catch(function (e) {
     $("pane").textContent = "";
     $("pane").appendChild(el("p", "muted", String(e.message || e)));
@@ -770,7 +803,9 @@ api("/api/runs").then(function (d) {
     toggleOverlay(true);
     return;
   }
-  if (parts[1] !== "run") history.replaceState({}, "", "/run/" + id);
+  if (parts[1] !== "run") {
+    history.replaceState({}, "", "/run/" + id + location.hash);
+  }
   load(id);
   /* Bare `tape ui` opens the newest run with the overlay up, so discovery is
      one keystroke away without being the landing page. */

@@ -64,6 +64,15 @@ one line before the question that asked about it.
 and replay only saves about a second. The ~80× figure below is measured on
 [a realistic agent](examples/m3_replay_speed.py) paying 400 ms per call.)
 
+**The same bug in the viewer** — `tape ui`, local, keyboard-first, no accounts:
+
+![The tape ui context diff: a user message flagged TRUNCATED, with the 280 characters it kept above the 511 it lost](https://raw.githubusercontent.com/vedanth2406/reeltime/main/ui.png)
+
+A message that survived but lost most of itself gets its own gutter, with the
+kept prefix and the dropped tail as separate blocks — an inline diff of "the
+last 511 characters vanished" is unreadable. Nothing else renders this, because
+nothing else records it. [More on the viewer](#the-viewer).
+
 ---
 
 ## Start here: what is actually nondeterministic about your agent?
@@ -981,7 +990,7 @@ of thing that changes an agent's behaviour invisibly. See
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 833 tests
+pytest                                  # 872 tests
 pytest --cov --cov-report=term-missing  # core/ is at 95%
 python examples/m3_replay_speed.py      # the benchmark above
 ```

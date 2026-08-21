@@ -15,22 +15,29 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 | | |
 |---|---|
 | Milestones done | M1–M11, including M5.5. There is no M8 — see the roadmap |
-| Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0`, `0.5.0`, `0.6.0` — all on PyPI |
-| In the tree | `0.6.0` released; **M11 (`tape ui`) complete and unreleased** — see [`ui-design.md`](ui-design.md) |
+| Published | `0.1.1` … `0.6.0`, `0.7.0` — all on PyPI |
+| In the tree | `0.7.0` released and verified. **M12 is next, and is not yet scoped** |
 | Tests | 872 passing, 1 skipped, 7 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
-| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0`, `v0.6.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
+| Tags | `v0.1.1` … `v0.6.0`, `v0.7.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
 **0.6.0 is released, tagged at `7ea7e7a`, and verified** — the step-7 gate
 printed `RELEASE VERIFIED`, and `pip install reeltime` gives 0.6.0. That
 shipped M10: `urllib3` interception, closing the Bedrock/boto3 gap.
 
-**M11 (`tape ui`) is complete and unreleased.** The approved design is
+**`0.7.0` shipped M11 (`tape ui`).** The approved design is
 [`ui-design.md`](ui-design.md); read it before touching `core/ui/`, because the
 two departures from spec §10 (no web framework, no fork button) are decisions
 rather than omissions. There is no M8; that slot was emptied by the
 resequencing, not skipped.
+
+**M12 — benchmarks, a docs site, and the v1.0 cut — is deliberately not scoped
+yet.** It is the milestone that decides what v1.0 means, so it gets its own
+scoping pass rather than being rolled into. The README's overhead numbers
+(~2 ms per HTTP event, 20–30 µs per ambient read) predate M5.5, M7, M9, M10 and
+M11 and **must be re-measured, not re-quoted** — that is the first thing M12
+owes anybody.
 
 ### Two things to know before the next release
 
@@ -111,6 +118,12 @@ Event kinds today: `llm`, `http`, `tool`, `mcp`, `chain`, `rand`, `time`, `uuid`
 - **0.4.0** — M5.5 (MCP sessions), M7 (`tape doctor`), the patch-grammar audit,
   and the fork-footer fix. `tape doctor` leads the README: it is the first thing
   in the project that is useful before you have recorded anything.
+- **0.7.0** — M11: `tape ui`, a local viewer for the surface nothing else
+  renders — context diff with truncation called out, fork tree, divergence
+  point, chain tree, doctor findings by call site. Stdlib server and one
+  inlined HTML file, so `dependencies = []` still holds; loopback-only;
+  read-only; and it never spawns the user's agent. The CLI's `planned:` epilog
+  is gone because every promised verb now exists.
 - **0.6.0** — M10: `urllib3` interception, so `boto3`/Bedrock record and
   replay at all. **A silent-recording fix, not a feature**: before it, a
   Bedrock agent recorded nothing and its "replay" went live. Also the Bedrock
