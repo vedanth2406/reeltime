@@ -210,7 +210,24 @@ def test_version(capsys):
 def test_bare_invocation_prints_help(capsys):
     assert run_cli() == 0
     out = capsys.readouterr().out
-    assert "run" in out and "planned:" in out
+    for verb in ("run", "replay", "fork", "diff", "doctor", "ui", "ls", "show"):
+        assert verb in out, verb
+
+
+def test_the_planned_epilog_appears_only_while_something_is_planned(capsys):
+    """`PLANNED` is empty as of M11 -- every verb promised now exists.
+
+    The epilog and the README roadmap are the only two places this project
+    promises anything, so they must not drift. An epilog reading "planned:"
+    with nothing after it is worse than no epilog, which is what this pins.
+    """
+    from reeltime.cli import PLANNED
+
+    run_cli()
+    out = capsys.readouterr().out
+    assert ("planned:" in out) is bool(PLANNED)
+    for _, _, milestone in PLANNED:
+        assert milestone in out
 
 
 def test_sub_cent_costs_are_not_rounded_to_zero(recorded, tape_dir, capsys):

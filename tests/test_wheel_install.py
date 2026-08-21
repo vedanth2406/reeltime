@@ -179,9 +179,10 @@ def test_the_wheel_ships_every_module_in_the_source_tree(wheel):
     module, and which module gets dropped is exactly the part nobody can
     predict in advance.
 
-    M9 added three modules to the wheel and M10 added three more
+    M9 added three modules to the wheel, M10 added three more
     (``core/http/urllib3_shim.py``, ``core/aws.py``,
-    ``core/decoders/bedrock.py``). Every one of them installs conditionally --
+    ``core/decoders/bedrock.py``), and M11 added ``core/ui/`` including a
+    non-Python file, ``index.html``. Every one of them loads conditionally --
     the shim only patches if ``urllib3`` is importable, the decoder only fires
     on a matching response -- so a wheel missing any of them does not fail on
     import. It records fewer events, which is the failure mode this whole
@@ -196,10 +197,15 @@ def test_the_wheel_ships_every_module_in_the_source_tree(wheel):
     source = REPO / "src" / "reeltime"
     expected = sorted(
         path.relative_to(source.parent).as_posix()
-        for path in source.rglob("*.py")
-        if "__pycache__" not in path.parts
+        for path in source.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+        and path.suffix in (".py", ".html", ".typed", "")
     )
     assert len(expected) > 40, "the glob stopped matching the source tree"
+    # Not only modules: `core/ui/index.html` *is* the viewer, and a wheel
+    # without it serves a 500 that no unit test can see, because the unit
+    # suite reads the file off the source tree.
+    assert "reeltime/core/ui/index.html" in expected
 
     shipped = set(zipfile.ZipFile(wheel).namelist())
     missing = [name for name in expected if name not in shipped]
