@@ -6,10 +6,31 @@ received. Or run `tape doctor` and find out what makes your agent
 irreproducible in the first place, without recording anything.
 
 [![PyPI](https://img.shields.io/pypi/v/reeltime.svg)](https://pypi.org/project/reeltime/)
+[![Downloads](https://static.pepy.tech/badge/reeltime)](https://pepy.tech/project/reeltime)
 [![Python](https://img.shields.io/pypi/pyversions/reeltime.svg)](https://pypi.org/project/reeltime/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![reeltime: record an agent, replay it offline, and see what the model actually read](https://raw.githubusercontent.com/vedanth2406/reeltime/main/demo.gif)
+
+**Your agent failed at step 14. You re-ran it, and now it fails at step 11.**
+Nothing you can reproduce is nothing you can fix — so you re-roll and hope.
+reeltime records the four boundaries that make a run nondeterministic and
+replays them exactly, offline, for free.
+
+```bash
+pip install reeltime
+```
+
+```bash
+tape run python agent.py       # record; your code is untouched
+tape replay last               # offline, instant, $0.00
+tape show last 14 --context    # the exact bytes the model received
+tape ui last                   # or scrub it in a local viewer
+```
+
+Nothing is required at runtime — the core is standard library only.
+
+---
 
 <details open>
 <summary>The same session as text</summary>
@@ -109,11 +130,6 @@ CI gate: **this agent is reproducible, and here is the check that says so.**
 That is the standalone half. The rest of this page is what you get once you
 start recording.
 
-## The problem
-
-Your agent failed at step 14. You re-ran it, and now it fails at step 11.
-Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
-
 ## What this does about it
 
 - **`tape doctor` measures your agent's nondeterminism instead of guessing at
@@ -162,6 +178,9 @@ pip install reeltime
 Nothing is required at runtime: the core is standard library only. `httpx`,
 `httpx2`, `requests` and `urllib3` are patched if you have them — the last of
 those is what puts `boto3`/Bedrock on tape, since botocore is built on it.
+
+Python 3.9+. reeltime is **1.0 and feature-complete**; the API, the CLI surface
+and the [trace format](#trace-format-stability) are under semantic versioning.
 
 ## Quickstart
 
@@ -1055,6 +1074,10 @@ of thing that changes an agent's behaviour invisibly. See
 [MCP sessions](#mcp-sessions).
 
 ## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the bar a change has to clear —
+the wheel-gate marker, the four-step rule for patch-grammar fields, and why a
+test that cannot fail is decoration.
 
 ```bash
 git clone https://github.com/vedanth2406/reeltime

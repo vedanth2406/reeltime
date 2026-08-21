@@ -84,6 +84,7 @@ Homepage = "https://github.com/vedanth2406/reeltime"
 Repository = "https://github.com/vedanth2406/reeltime"
 Issues = "https://github.com/vedanth2406/reeltime/issues"
 Changelog = "https://github.com/vedanth2406/reeltime/blob/main/CHANGELOG.md"
+Contributing = "https://github.com/vedanth2406/reeltime/blob/main/CONTRIBUTING.md"
 
 [project.scripts]
 tape = "reeltime.cli:main"
