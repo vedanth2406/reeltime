@@ -252,16 +252,24 @@ VIRTUAL_ENV=/tmp/rt-live uv pip install --refresh reeltime
 /tmp/rt-live/bin/tape --version
 ```
 
-**`--refresh` is not optional here, and leaving it off will lie to you.** `uv`
-caches its index, so an install run minutes after an upload happily resolves the
-*previous* version and reports success. On 0.6.0 this printed
-`reeltime 0.5.0` — with a `planned:` epilog from the older build, which is the
-only reason it was caught rather than being read as a pass. This is the same
-class of problem as TestPyPI's indexing lag in step 4, and it fails in the
-worse direction: not an error, but a wrong version reported as fine.
+**Read the version it prints, and do not trust the first answer.** `uv` caches
+aggressively, so an install run shortly after an upload can resolve the
+*previous* version and report success — no error, just a wrong version looking
+like a pass. It is the same class of problem as TestPyPI's indexing lag in
+step 4, failing in the worse direction.
 
-If the version is still wrong with `--refresh`, wait and retry before believing
-it — PyPI's CDN takes a moment.
+Measured on the last two releases:
+
+- **0.6.0** — a plain `uv pip install reeltime` gave `reeltime 0.5.0`. Only the
+  stale `planned:` epilog from the older build gave it away.
+- **0.7.0** — `--refresh` was *not enough on its own*: the first attempt still
+  installed 0.6.0, in 5 ms, from cache. PyPI itself was fine — the JSON API and
+  the simple index both listed 0.7.0 at that moment. A second identical
+  command got 0.7.0.
+
+So: pass `--refresh`, **and if the version is wrong, run it again** before
+concluding anything is broken. Check the version against what you uploaded
+every time; it is the one line of this step's output that matters.
 
 Check <https://pypi.org/project/reeltime/> — the GIF, the screenshot, the
 tables, the links.
