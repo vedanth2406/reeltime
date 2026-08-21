@@ -3,23 +3,50 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-08-21
 
-M10 — `urllib3` interception. The last uncovered HTTP stack, and the one where
-the failure was worst.
+**Bedrock and `boto3` are recorded and replayed.** That is the release: M10
+closed the last uncovered HTTP stack, and it is the one where the failure was
+worst — an agent on Bedrock previously recorded **nothing at all**.
+
+### If you use Bedrock, read this first
+
+Before 0.6.0, `tape run` against a Bedrock agent produced a trace with no
+events, no error, and no warning, and `tape replay` on it went to the **real
+API** — live calls, real tokens, real money, while reporting itself as offline
+and free. `botocore` is built on `urllib3`, which sits below the httpx and
+requests shims, so nothing in reeltime ever saw the call.
+
+If you have a stored Bedrock "replay" from an earlier version, it was a live
+run. Re-record it.
+
+### New capability boundary: forking a signed request
+
+Worth knowing before you reach it. `botocore` signs a request and *then* hands
+it to `urllib3`, which is where reeltime's seam is, and AWS SigV4 covers the
+URI path and a hash of the body. So on a urllib3-recorded event:
+
+- `--patch llm.response=…` **works.** Substituting a completion sends nothing,
+  so there is no signature left to invalidate. The substituted body is built
+  from the parent event's own recorded response, so it comes back in that
+  model family's shape — a Titan caller still reads `results[0].outputText`.
+- `--patch llm.model=…`, `llm.system`, `llm.temperature`, `http.url` and
+  `http.body` are **refused**, with a message naming the signature as the
+  reason and pointing at `llm.response`. On Bedrock the model id is a *path
+  segment*, not a body field, so `llm.model` is exactly the case that rewrites
+  signed bytes; sending it anyway would return `SignatureDoesNotMatch` — an
+  error about credentials, for what is really an unsupported patch.
+
+These patches previously parsed, were accepted, and silently did nothing, which
+is the failure `tool.args` had for two releases.
 
 ### Added
 
-- **`boto3` / `botocore` / Bedrock are recorded and replayed.** Until now an
-  agent on Bedrock recorded **nothing at all** — no event, no error, and a
-  `tape replay` that quietly went to the real API. botocore is built on
-  `urllib3`, which sits below the httpx and requests shims, so nothing ever saw
-  the call. The new seam is `HTTPConnectionPool.urlopen`: public, documented,
-  and underneath every AWS SDK without knowing any of them exist.
-
-  This is a **silent-recording fix, not a new feature**, and it is the largest
-  version of the failure design principle 4 forbids. If you have replayed a
-  Bedrock agent before this release, that replay was making live calls.
+- **A `urllib3` shim on `HTTPConnectionPool.urlopen`** — public, documented, and
+  underneath every AWS SDK without knowing any of them exist. This is what puts
+  `boto3` on tape, and it covers anything else built on `urllib3` for free. A
+  `requests` call passes through it a second time and is still recorded as
+  **one** event, because the M1 outermost-boundary rule already covered that.
 
 - **Bedrock's binary event stream is recorded frame for frame.** Bedrock streams
   `application/vnd.amazon.eventstream`, not SSE — a length prelude, typed
@@ -53,20 +80,9 @@ the failure was worst.
 
 ### Changed
 
-- **Request-rewriting patches are refused on an AWS-signed event.**
-  `--patch llm.model=…`, `llm.system`, `llm.temperature`, `http.url` and
-  `http.body` now fail with an explanation instead of being accepted and
-  silently doing nothing.
-
-  botocore signs the request before it reaches reeltime's seam, and SigV4
-  covers the URI path and a hash of the body — and on Bedrock the model id is a
-  *path segment*, not a body field. Rewriting either would produce
-  `SignatureDoesNotMatch`, an error about credentials for what is really an
-  unsupported patch. The message names the reason and points at
-  `llm.response=`, which works because a substituted result sends nothing.
-
-  Previously these patches parsed, were accepted, and changed nothing — the
-  same failure `tool.args` had for two releases.
+- **Request-rewriting patches are refused on an AWS-signed event**, rather than
+  accepted and silently dropped. See "New capability boundary" above for the
+  reasoning and the patch that does work.
 
 - **`anthropic.claude-3-5-sonnet` is no longer priced on Bedrock**, and neither
   is Nova 2.0. Both are served through **cross-region inference profiles**,

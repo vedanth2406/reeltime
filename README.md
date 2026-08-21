@@ -788,6 +788,29 @@ Being precise about the boundary is the point.
   release, to cover a stack no LLM SDK reeltime targets is built on. So the
   cost went into the guard instead, which is the part that was actually
   dangerous.
+- **A reported cost is a base-rate estimate, and it under-reports.**
+  `cost_usd` is a lookup in [`pricing.py`](src/reeltime/core/decoders/pricing.py)
+  against the model id in the request, and a trace records a request, not a
+  bill. Three things it cannot see, all of which mean the real figure is
+  **higher**, never lower:
+
+  - **Region.** Bedrock rows are US rates. The same `amazon.nova-lite` is
+    $0.06/$0.24 per 1M in `us-east-1` and `us-west-2` and **$0.078/$0.312** in
+    `eu-central-1` — about 30% more. The URL names a region only when the
+    endpoint is regional, and an inference profile hides it entirely.
+  - **Latency-optimised inference.** Bedrock bills `amazon.nova-pro` at
+    $1.00/$4.00 in latency-optimised mode against $0.80/$3.20 standard — under
+    the **same model id**. Nothing in the recorded request distinguishes them.
+  - **Batch, prompt caching, fast mode, and the US data-residency multiplier**
+    are likewise not modelled. Batch is half price and caching is cheaper
+    still, so a cached or batched run is over-reported instead — the one
+    direction that errs the other way.
+
+  A model with no row reports **`cost_usd: null`**, never a guess — including
+  Claude-on-Bedrock from 3.5 Sonnet on, and Nova 2.0, whose rates depend on a
+  cross-region routing tier the request does not record. Token counts still
+  populate. Treat the number as an order of magnitude for one run, not as
+  accounting.
 - **Forking a *signed* request rewrites nothing.** A Bedrock call is signed by
   botocore before reeltime's seam sees it, and AWS SigV4 covers the URL and a
   hash of the body — so `--patch llm.model=…`, `llm.system`, `http.url` and

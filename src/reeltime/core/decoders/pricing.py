@@ -7,10 +7,10 @@ something a user can correct with a pull request without reading any code.
 
 * https://developers.openai.com/api/docs/pricing — checked **2026-08-18**
 * https://platform.claude.com/docs/en/about-claude/pricing — checked **2026-08-18**
-* https://aws.amazon.com/bedrock/pricing/ — checked **2026-08-20**. That page
+* https://aws.amazon.com/bedrock/pricing/ — checked **2026-08-21**. That page
   still renders its current-model tables client-side, so it remains unusable
   as a source for anything not in the served HTML.
-* **AWS Price List Query API** — checked **2026-08-20**, and the source for
+* **AWS Price List Query API** — checked **2026-08-21**, and the source for
   every Bedrock row below. Public, unauthenticated, and machine-readable, which
   is what the pricing page is not:
 
@@ -39,7 +39,7 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 #: The date the tables below were last checked against the pages above.
-CHECKED = "2026-08-20"
+CHECKED = "2026-08-21"
 
 #: model prefix -> (USD per 1M input tokens, USD per 1M output tokens)
 #:
