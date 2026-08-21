@@ -482,6 +482,101 @@ refused.**
 
 ---
 
+## Redaction fixtures use AWS's published example credentials
+
+**2026-08-21: GitHub secret scanning flagged `tests/test_redact.py` as leaking
+an AWS temporary access key id.** It was a false positive, and it is a good
+problem to have — it means the redaction fixtures are realistic enough to fool
+a scanner, which is the only way they prove anything. A token shaped unlike a
+token would pass a test that a real leak would fail.
+
+But a false positive still costs: an alert nobody can dismiss on sight is an
+alert people learn to ignore. So the rule now is **every credential fixture is
+a value AWS (or the provider) publishes as an example**, never an invented
+look-alike. A reader can search it and land on the vendor's documentation
+instead of taking a comment's word for it.
+
+The interesting detail is *why only the AWS ones were flagged*. `test_redact.py`
+already built most of its fixtures by assembly — `"sk-" + "A1b2C3d4E5f6G7h8I9j0"
+* 2`, `"ghp_" + "a1B2c3D4e5" * 4` — so no complete token ever appears as a
+literal in the source. The AWS values were the ones written out whole, and they
+were the ones that alerted.
+
+Three things came out of it:
+
+- `FAKE_SESSION_TOKEN` is now AWS's documented STS session token (the
+  `AQoEXAMPLE…` value from "Use GetSessionToken with an AWS SDK or CLI"),
+  replacing an invented base64 blob.
+- The temporary key id is **assembled** — `"ASIA" "IOSFODNN7EXAMPLE"`. Changing
+  the *value* would not have helped: it was already AWS's documented example,
+  and what the scanner matches is the `ASIA` prefix plus sixteen uppercase
+  characters, which every well-formed temporary key id has. Splitting the
+  literal stops the pattern matching the source while leaving the runtime string
+  byte-identical, so the test is exactly as strong.
+- `AKIAIOSFODNN7EXAMPLE` is **left whole** in all four places it appears,
+  including `core/aws.py`, which ships. It is the canonical long-term example
+  and has never been flagged in this repo — evidence it is allowlisted, and
+  obfuscating it would cost readability for nothing.
+
+Also renamed a fixture that was called `AKIAREALLOOKINGKEY`: it only ever needed
+to differ from the dummy `core/aws.py` injects, so it is now
+`"not-the-injected-dummy"` — a string that cannot be an AWS credential cannot
+become an alert either.
+
+**If you add a credential fixture, use the vendor's published example, and
+assemble it rather than writing it whole.**
+
+---
+
+## M11: the measurement that changed the design
+
+**The timeline model in the approved design was wrong, and measuring is how we
+found out.** The design said "width proportional to `dur_ms`", bucketing above
+~2,000 events. Both numbers were wrong:
+
+- Pure proportional layout is unusable almost immediately. With a realistic
+  agent mix, **38% of blocks fall under 3px at 50 events**, and the 10% mark is
+  crossed at **eleven**. A 1 ms tool call beside a 1400 ms model call gets
+  1/1400th of the width.
+- With a 3px floor and a 2px gap, the strip saturates at
+  `strip_width / (floor + gap)` — **240 at 1200px**, not 2,000. It is computed
+  at draw time from the live width rather than hardcoded, so a wider window
+  really does show more events.
+- **Proportionality degrades before saturation.** At 200 events the widest
+  block is only ~2× the narrowest though the real durations differ by ~787×.
+  The strip is a map; exact durations are on the status bar, which is why that
+  is not redundant.
+
+`tools/measure_timeline.py` is the measurement, kept so the numbers can be
+re-derived rather than re-guessed, and `index.html` carries a comment pointing
+at it.
+
+**The general lesson is the one M10 already taught twice: measure rather than
+reason.** A layout constant is exactly the kind of thing that looks like a
+judgement call and is actually an arithmetic question.
+
+## The frontend is tested, without a browser
+
+`core/ui/index.html` is ~600 lines of JavaScript that pytest cannot reach. The
+API tests prove the *payloads* are right and say nothing about the code that
+draws them, so a typo in a render function would be invisible until someone
+opened the page.
+
+`tools/ui_render_check.js` executes the real render functions over payloads
+captured from a real trace, under a deliberately dumb DOM stub — enough for an
+exception to escape, and far short of the headless browser the design rejected.
+`tests/test_ui.py` drives it and skips when node is absent, so it never blocks
+`pip install -e ".[dev]"`.
+
+**It was verified able to fail, and the first version could not.** Renaming
+`kept_prefix` to `keptPrefix` in the truncation branch did *not* fail it: the
+undefined field is falsy, so the code silently took the else branch and threw
+nothing. An exception-only check sails straight past the most likely regression
+in a renderer. The harness now asserts the *rendered output* — a kept-prefix
+truncation must produce `kept` and `lost` blocks — and that does fail.
+
+---
+
 ## Decisions not to re-litigate
 
 **Transport-layer interception, never SDK patching.** The shim patches

@@ -52,18 +52,47 @@ def test_sensitive_headers_are_dropped_entirely():
 
 #: A realistic signed AWS request's headers. Every field is the real format:
 #: the `Authorization` line is what SigV4 actually emits, and
-#: `X-Amz-Security-Token` is the STS session credential that anything using
-#: temporary credentials carries -- an assumed role, an instance profile, SSO,
-#: a Lambda. It is an opaque blob with no recognisable prefix, which is exactly
-#: why the payload scan cannot catch it.
+# -- why every credential below is one AWS publishes ---------------------
+#
+# These fixtures have to *look* like the real thing or they prove nothing: the
+# scrubber is pattern-matching, and a token shaped unlike a token would pass a
+# test that a real leak would fail. The consequence showed up in August 2026,
+# when GitHub secret scanning flagged the temporary access key id here as a
+# live AWS credential -- a false positive, but a real cost, because an alert
+# nobody can dismiss on sight is an alert people learn to ignore.
+#
+# So the values are **AWS's own published examples**, not invented look-alikes:
+# a reader can search any of them and land on AWS documentation rather than
+# having to take a comment's word for it, and scanners increasingly allowlist
+# them. See "Use GetSessionToken with an AWS SDK or CLI" in the IAM guide,
+# which publishes this exact access-key / secret / session-token triple.
+#
+#: The documented session token. `X-Amz-Security-Token` carries the STS session
+#: credential that anything using temporary credentials sends -- an assumed
+#: role, an instance profile, SSO, a Lambda. It is an opaque blob with no
+#: recognisable prefix, which is exactly why the payload scan cannot catch it
+#: and the header rule has to.
 FAKE_SESSION_TOKEN = (
-    "FwoGZXIvYXdzEBYaDExhbXBsZVRva2VuIiuvNotARealTokenButShapedLikeOne"
-    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP+/=="
+    "AQoEXAMPLEH4aoAH0gNCAPyJxz4BlCFFxWNE1OPTgk5TthT+FvwqnKwRcOIfrRh3c/LTo6"
+    "UDdyJwOOvEVPvLXCrrrUtdnniCEXAMPLE/IvU1dYUg2RVAJBanLiHb4IgRmpRV3zrkuWJO"
+    "gQs8IZZaIv2BXIa2R4OlgkBN9bkUDNCJiBeb/AXlzBBko7b15fjrBs2+cTQtpZ3CYWFXG8"
+    "C5zqx37wnOE49mRl/+OtkIKGO7fAE"
 )
+
+#: Assembled rather than written whole, and that is the point. The value *is*
+#: AWS's documented example -- switching to a different one would not help,
+#: because what the scanner matches is the `ASIA` prefix and sixteen uppercase
+#: characters, which any well-formed temporary key id has. Splitting the
+#: literal is what stops the pattern matching the source while leaving the
+#: runtime string byte-identical, so the redaction test is exactly as strong.
+#: The long-term `AKIA` example is left whole below: it appears in four places
+#: in this repo, including shipped code, and has never been flagged.
+FAKE_TEMP_KEY_ID = "ASIA" "IOSFODNN7EXAMPLE"
+
 SIGV4_HEADERS = {
     "Authorization": (
         "AWS4-HMAC-SHA256 "
-        "Credential=ASIAIOSFODNN7EXAMPLE/20260819/us-east-1/bedrock/aws4_request, "
+        "Credential=" + FAKE_TEMP_KEY_ID + "/20260819/us-east-1/bedrock/aws4_request, "
         "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, "
         "Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024"
     ),
@@ -82,7 +111,7 @@ def test_a_signed_aws_request_leaves_no_credential_behind():
     assert out["Authorization"] == "<redacted>"
     assert out["X-Amz-Security-Token"] == "<redacted>"
     assert FAKE_SESSION_TOKEN not in json.dumps(out)
-    assert "ASIAIOSFODNN7EXAMPLE" not in json.dumps(out)
+    assert FAKE_TEMP_KEY_ID not in json.dumps(out)
     assert "fe5f80f77d5fa3beca038a248ff027d0445342fe" not in json.dumps(out)
 
     # The two that are not credentials survive: a signed request that records

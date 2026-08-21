@@ -709,14 +709,18 @@ def test_a_recording_never_supplies_credentials(tape_dir, server, no_aws_environ
     """
     server.route(TITAN_PATH, json=TITAN_BODY)
     os.environ.update(aws.DUMMY)
-    os.environ["AWS_ACCESS_KEY_ID"] = "AKIAREALLOOKINGKEY"
+    # Deliberately *not* a well-formed key id: the assertion only needs a value
+    # distinguishable from the dummy `aws.DUMMY` would inject, and a string
+    # that cannot be an AWS credential cannot become a secret-scanning alert
+    # either. It was `AKIAREALLOOKINGKEY` until one such false positive landed.
+    os.environ["AWS_ACCESS_KEY_ID"] = "not-the-injected-dummy"
 
     with tape.session(tape_dir=tape_dir, collect_git=False):
         bedrock_client(server.base_url).invoke_model(
             modelId=TITAN_MODEL, body=json.dumps({"inputText": "hi"}))
-        assert os.environ["AWS_ACCESS_KEY_ID"] == "AKIAREALLOOKINGKEY"
+        assert os.environ["AWS_ACCESS_KEY_ID"] == "not-the-injected-dummy"
 
-    assert os.environ["AWS_ACCESS_KEY_ID"] == "AKIAREALLOOKINGKEY"
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "not-the-injected-dummy"
 
 
 # -- degrading without boto3 ---------------------------------------------
