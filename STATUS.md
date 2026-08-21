@@ -1,6 +1,6 @@
 # Status
 
-Handoff notes, current as of **2026-08-20**. Written so a session starting cold
+Handoff notes, current as of **2026-08-21**. Written so a session starting cold
 can pick up without re-deriving anything or re-litigating decisions that were
 already made for reasons.
 
@@ -15,26 +15,20 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 | | |
 |---|---|
 | Milestones done | M1–M10, including M5.5. There is no M8 — see the roadmap |
-| Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0`, `0.5.0` — all on PyPI |
-| In the tree | **M10 complete and unreleased.** `0.5.0` is the last published version |
+| Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0`, `0.5.0`, `0.6.0` — all on PyPI |
+| In the tree | `0.6.0` released and verified. **M11 (`tape ui`) in progress** — see [`ui-design.md`](ui-design.md) |
 | Tests | 833 passing, 7 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
-| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
+| Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0`, `v0.6.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
 
-**M10 is done and sitting unreleased in the tree** — `urllib3` interception,
-closing the Bedrock/boto3 gap. Core, tests, example and docs are all in;
-[What M10 shipped](#what-m10-shipped) is the summary and
-[the SigV4 finding](#forking-below-a-signer-the-sigv4-asymmetry) is the one
-piece of it that changed a decision rather than adding code. There is no M8;
-that slot was emptied by the resequencing, not skipped. The web UI moved from
-M10 to M11 to make room; the roadmap at the bottom says why, and why that one
-shuffled where M8 did not.
+**0.6.0 is released, tagged at `7ea7e7a`, and verified** — the step-7 gate
+printed `RELEASE VERIFIED`, and `pip install reeltime` gives 0.6.0. That
+shipped M10: `urllib3` interception, closing the Bedrock/boto3 gap.
 
-**The next thing to do is release it.** Follow [`RELEASING.md`](RELEASING.md)
-from step 0; the `CHANGELOG.md` entry is written and sits under
-`## [Unreleased]`, and the version has not been chosen or bumped yet. `0.5.0`
-is published, tagged at the commit it was built from, and verified.
+**M11 (`tape ui`) is now in progress.** The approved design is
+[`ui-design.md`](ui-design.md); read it before touching `core/ui/`. There is no
+M8; that slot was emptied by the resequencing, not skipped.
 
 ### Two things to know before the next release
 
@@ -111,6 +105,14 @@ Event kinds today: `llm`, `http`, `tool`, `mcp`, `chain`, `rand`, `time`, `uuid`
 - **0.4.0** — M5.5 (MCP sessions), M7 (`tape doctor`), the patch-grammar audit,
   and the fork-footer fix. `tape doctor` leads the README: it is the first thing
   in the project that is useful before you have recorded anything.
+- **0.6.0** — M10: `urllib3` interception, so `boto3`/Bedrock record and
+  replay at all. **A silent-recording fix, not a feature**: before it, a
+  Bedrock agent recorded nothing and its "replay" went live. Also the Bedrock
+  decoder across five families, the binary event-stream capture, dummy
+  credentials for replay, the `x-amz-security-token` redaction fix, and Nova
+  pricing from the AWS Price List API. Carries one new capability boundary:
+  request-rewriting `--patch` fields are refused on a signed request, while
+  `llm.response=` works.
 - **0.5.0** — M9: the LangChain adapter (`chain` events), the graph-change diff,
   `tape run --langchain`, the `langchain-core` version gate with its CI floor
   job, and the aiohttp guard. **The guard is a behaviour change** and the

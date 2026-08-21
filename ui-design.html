@@ -1,0 +1,743 @@
+<title>Tape UI</title>
+<style>
+  /* ---- tokens: dark-first, deliberately ---------------------------- */
+  :root {
+    --ground:  #14120F;
+    --panel:   #1D1A16;
+    --raised:  #252118;
+    --line:    #2E2922;
+    --line-2:  #3D3629;
+    --ink:     #EDE7DC;
+    --ink-mid: #B7AD9D;
+    --ink-dim: #8A8073;
+    --oxide:   #D98A2B;
+    --oxide-q: #7A4E17;
+    --tape:    #6FA8A0;
+
+    --k-llm:   #D98A2B;
+    --k-http:  #6FA8A0;
+    --k-tool:  #A38BC4;
+    --k-mcp:   #7FA65C;
+    --k-chain: #6A93C4;
+    --k-amb:   #6E6559;
+
+    --good:    #7FA65C;
+    --warn:    #D98A2B;
+    --crit:    #C4685C;
+
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+    --s1: .35rem;  --s2: .7rem;  --s3: 1.1rem;
+    --s4: 1.8rem;  --s5: 2.8rem; --s6: 4.4rem;
+    --measure: 66ch;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ground:  #EFEDE8;
+      --panel:   #F7F6F3;
+      --raised:  #FFFFFF;
+      --line:    #DCD8D0;
+      --line-2:  #C6C0B4;
+      --ink:     #1A1713;
+      --ink-mid: #4E483F;
+      --ink-dim: #726B60;
+      --oxide:   #9A5A11;
+      --oxide-q: #E8D5B6;
+      --tape:    #2F6A62;
+
+      --k-llm:   #9A5A11;
+      --k-http:  #2F6A62;
+      --k-tool:  #5F4A82;
+      --k-mcp:   #4A6B2C;
+      --k-chain: #33578A;
+      --k-amb:   #8A8377;
+
+      --good:    #4A6B2C;
+      --warn:    #8A5A0E;
+      --crit:    #9A3E32;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:  #EFEDE8;
+    --panel:   #F7F6F3;
+    --raised:  #FFFFFF;
+    --line:    #DCD8D0;
+    --line-2:  #C6C0B4;
+    --ink:     #1A1713;
+    --ink-mid: #4E483F;
+    --ink-dim: #726B60;
+    --oxide:   #9A5A11;
+    --oxide-q: #E8D5B6;
+    --tape:    #2F6A62;
+    --k-llm:   #9A5A11;
+    --k-http:  #2F6A62;
+    --k-tool:  #5F4A82;
+    --k-mcp:   #4A6B2C;
+    --k-chain: #33578A;
+    --k-amb:   #8A8377;
+    --good:    #4A6B2C;
+    --warn:    #8A5A0E;
+    --crit:    #9A3E32;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    display: grid;
+    grid-template-columns: 15rem minmax(0, 1fr);
+    gap: var(--s6);
+    max-width: 74rem;
+    margin: 0 auto;
+    padding: var(--s5) var(--s4) var(--s6);
+  }
+  @media (max-width: 60rem) {
+    .wrap { grid-template-columns: minmax(0,1fr); gap: var(--s4); padding-top: var(--s4); }
+    .rail { position: static; border-right: 0; border-bottom: 1px solid var(--line); padding-bottom: var(--s3); }
+  }
+
+  /* ---- rail -------------------------------------------------------- */
+  .rail {
+    position: sticky;
+    top: var(--s4);
+    align-self: start;
+    font-family: var(--mono);
+    font-size: .74rem;
+    line-height: 1.5;
+  }
+  .rail .mark {
+    font-size: .68rem; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--oxide); margin-bottom: var(--s3); display: block;
+  }
+  .rail a {
+    display: flex; gap: .6rem; padding: .3rem 0;
+    color: var(--ink-dim); text-decoration: none;
+    border-bottom: 1px solid transparent;
+  }
+  .rail a .n { color: var(--line-2); min-width: 1.2rem; }
+  .rail a:hover, .rail a:focus-visible { color: var(--ink); }
+  .rail a:focus-visible { outline: 2px solid var(--oxide); outline-offset: 3px; }
+  .rail .grp { margin-top: var(--s3); color: var(--ink-dim); opacity: .6;
+               letter-spacing: .12em; text-transform: uppercase; font-size: .64rem; }
+
+  /* ---- type -------------------------------------------------------- */
+  main { min-width: 0; }
+  .lede { max-width: var(--measure); }
+  h1 {
+    font-size: clamp(2.1rem, 5vw, 3.1rem);
+    line-height: 1.04; letter-spacing: -.03em; font-weight: 700;
+    text-wrap: balance; margin: 0 0 var(--s2);
+  }
+  .sub {
+    font-family: var(--mono); font-size: .78rem; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--oxide); margin: 0 0 var(--s3);
+  }
+  h2 {
+    font-size: 1.5rem; letter-spacing: -.018em; font-weight: 650;
+    text-wrap: balance; margin: 0 0 var(--s2); padding-top: .2rem;
+  }
+  h3 { font-size: 1.02rem; font-weight: 650; margin: var(--s3) 0 var(--s1); letter-spacing: -.01em; }
+  p, li { max-width: var(--measure); }
+  p { margin: 0 0 var(--s2); }
+  ul, ol { margin: 0 0 var(--s2); padding-left: 1.1rem; }
+  li { margin-bottom: .3rem; }
+  strong { font-weight: 650; color: var(--ink); }
+  em { font-style: italic; color: var(--ink-mid); }
+  a { color: var(--tape); text-underline-offset: 2px; }
+  code {
+    font-family: var(--mono); font-size: .855em;
+    background: var(--panel); border: 1px solid var(--line);
+    padding: .06em .34em; border-radius: 2px; color: var(--ink-mid);
+  }
+  section { margin-top: var(--s5); scroll-margin-top: var(--s3); }
+  .eyebrow {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .17em;
+    text-transform: uppercase; color: var(--ink-dim);
+    display: flex; align-items: center; gap: .7rem; margin-bottom: var(--s2);
+  }
+  .eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  /* ---- panels ------------------------------------------------------ */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    margin-bottom: var(--s3);
+    overflow: hidden;
+  }
+  .panel > header {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .8rem;
+    padding: .6rem var(--s3);
+    background: var(--raised);
+    border-bottom: 1px solid var(--line);
+  }
+  .panel > header .route {
+    font-family: var(--mono); font-size: .78rem; color: var(--oxide);
+  }
+  .panel > header .name { font-weight: 650; font-size: .96rem; letter-spacing: -.01em; }
+  .panel > header .tag {
+    margin-left: auto; font-family: var(--mono); font-size: .66rem;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-dim);
+    border: 1px solid var(--line-2); border-radius: 2px; padding: .1rem .4rem;
+  }
+  .panel .body { padding: var(--s3); }
+  .panel .body > :last-child { margin-bottom: 0; }
+  .src {
+    display: flex; gap: .6rem; padding: .5rem var(--s3);
+    border-top: 1px dashed var(--line);
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-dim);
+    background: color-mix(in srgb, var(--ground) 40%, transparent);
+  }
+  .src b { color: var(--ink-mid); font-weight: 400; letter-spacing: .08em;
+           text-transform: uppercase; font-size: .66rem; white-space: nowrap; padding-top: .08rem; }
+  .src span { min-width: 0; }
+
+  /* ---- callouts ---------------------------------------------------- */
+  .note {
+    border-left: 2px solid var(--oxide);
+    background: color-mix(in srgb, var(--oxide) 7%, transparent);
+    padding: var(--s2) var(--s3); margin: 0 0 var(--s3); border-radius: 0 3px 3px 0;
+  }
+  .note > :last-child { margin-bottom: 0; }
+  .note .lbl {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--oxide); display: block; margin-bottom: .3rem;
+  }
+
+  /* ---- tables ------------------------------------------------------ */
+  .scroll { overflow-x: auto; margin-bottom: var(--s3); border: 1px solid var(--line); border-radius: 3px; }
+  table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+  th, td { text-align: left; padding: .5rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-dim); font-weight: 400;
+    background: var(--raised); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { background: transparent; border: 0; padding: 0; color: var(--tape); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---- timeline mock ----------------------------------------------- */
+  .mock {
+    background: var(--ground); border: 1px solid var(--line);
+    border-radius: 3px; padding: var(--s3); margin-bottom: var(--s3);
+  }
+  .mock .cap {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-dim); margin-bottom: var(--s2);
+  }
+  .track { display: flex; gap: 2px; height: 2.1rem; align-items: stretch; }
+  .track i {
+    display: block; border-radius: 1px; opacity: .82;
+    border: 1px solid color-mix(in srgb, var(--ground) 45%, transparent);
+  }
+  .track i.sel { opacity: 1; outline: 2px solid var(--ink); outline-offset: 1px; }
+  .ticks { display: flex; gap: 2px; height: .45rem; margin-top: 3px; }
+  .ticks i { width: 2px; background: var(--k-amb); border-radius: 1px; }
+  .axis {
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: .66rem; color: var(--ink-dim); margin-top: .45rem;
+  }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-top: var(--s2);
+    font-family: var(--mono); font-size: .68rem; color: var(--ink-mid);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .legend b { width: .6rem; height: .6rem; border-radius: 1px; display: inline-block; }
+
+  /* ---- diff mock --------------------------------------------------- */
+  .diff { font-family: var(--mono); font-size: .78rem; line-height: 1.55; }
+  .diff .row {
+    display: grid; grid-template-columns: 1.4rem 1fr; gap: .6rem;
+    padding: .3rem .5rem; border-left: 2px solid transparent;
+  }
+  .diff .row .g { color: var(--ink-dim); text-align: center; }
+  .diff .same { color: var(--ink-dim); }
+  .diff .trunc {
+    border-left-color: var(--crit);
+    background: color-mix(in srgb, var(--crit) 10%, transparent);
+  }
+  .diff .trunc .g { color: var(--crit); }
+  .diff .flag {
+    font-size: .66rem; letter-spacing: .12em; color: var(--crit);
+    border: 1px solid var(--crit); border-radius: 2px; padding: 0 .3rem; margin-left: .4rem;
+  }
+  .diff .kept { color: var(--good); }
+  .diff .lost { color: var(--crit); opacity: .85; }
+
+  /* ---- keys -------------------------------------------------------- */
+  kbd {
+    font-family: var(--mono); font-size: .74rem;
+    background: var(--raised); border: 1px solid var(--line-2);
+    border-bottom-width: 2px; border-radius: 3px;
+    padding: .05rem .34rem; color: var(--ink); white-space: nowrap;
+  }
+
+  .out td:first-child { color: var(--ink-mid); }
+
+  footer {
+    margin-top: var(--s6); padding-top: var(--s3);
+    border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: .72rem; color: var(--ink-dim);
+    max-width: var(--measure);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<div class="wrap">
+  <nav class="rail" aria-label="Sections">
+    <span class="mark">M11 · tape ui</span>
+    <a href="#position"><span class="n">§</span> Position</a>
+    <a href="#departures"><span class="n">§</span> Two departures</a>
+    <a href="#arch"><span class="n">§</span> Architecture</a>
+    <div class="grp">Screens</div>
+    <a href="#s0"><span class="n">0</span> Runs index</a>
+    <a href="#s1"><span class="n">1</span> Run view</a>
+    <a href="#s2"><span class="n">2</span> Context</a>
+    <a href="#s3"><span class="n">3</span> Chain tree</a>
+    <a href="#s4"><span class="n">4</span> Fork tree</a>
+    <a href="#s5"><span class="n">5</span> Divergence</a>
+    <a href="#s6"><span class="n">6</span> Doctor</a>
+    <div class="grp">Then</div>
+    <a href="#keys"><span class="n">§</span> Keyboard</a>
+    <a href="#look"><span class="n">§</span> Look</a>
+    <a href="#server"><span class="n">§</span> Server</a>
+    <a href="#testing"><span class="n">§</span> Testing</a>
+    <a href="#scope"><span class="n">§</span> Scope</a>
+    <a href="#order"><span class="n">§</span> Build order</a>
+    <a href="#open"><span class="n">§</span> Open questions</a>
+  </nav>
+
+  <main>
+    <div class="lede">
+      <p class="sub">Milestone 11 · design for review</p>
+      <h1>A viewer for what only reeltime knows</h1>
+      <p>Screen inventory, what each screen renders, where its data comes from, and
+      what is deliberately left out. Nothing is built yet — this is the thing to
+      argue with first.</p>
+    </div>
+
+    <section id="position">
+      <div class="eyebrow">Position</div>
+      <h2>Not an observability dashboard</h2>
+      <p>LangSmith and Braintrust ship polished UIs backed by teams, and AgentTape
+      ships a static HTML viewer. Competing on breadth loses on every axis at once.
+      But none of them can render a fork tree, a divergence point, a context diff
+      with truncation called out, or a doctor finding grouped by call site —
+      because none of them <em>have</em> those things.</p>
+      <div class="note">
+        <span class="lbl">The scope test</span>
+        <p>Could a general observability tool render this from its own data? If yes,
+        it is out — however nice it would be. Aggregate cost charts, latency
+        percentiles, run volume, model-usage breakdowns: all out. Not because they
+        are hard, but because they are somebody else's product, and reeltime has
+        one developer's traces on one laptop.</p>
+      </div>
+    </section>
+
+    <section id="departures">
+      <div class="eyebrow">Two departures from spec §10</div>
+      <h2>No FastAPI, and no fork button</h2>
+
+      <h3>Standard library only</h3>
+      <p><code>pyproject.toml</code> says <code>dependencies = []</code>, and that is
+      load-bearing rather than incidental — it is why <code>pip install reeltime</code>
+      cannot break an environment, and the README says so. Spec §10 predates that
+      property mattering.</p>
+      <p>So the server is <code>http.server.ThreadingHTTPServer</code> and the frontend
+      is <strong>one HTML file with inlined CSS and JS</strong>: no build step, no npm,
+      no CDN, no framework. A debugger that needs a toolchain to look at a crash is a
+      debugger you will not open. It also works with no network at all, which matters
+      because the traces it reads came from a machine that may be offline.</p>
+      <p>The cost is real: no component library, no virtual DOM, hand-rolled keyboard
+      handling. For a six-screen read-only viewer with a fixed layout that is a good
+      trade — and if the UI ever needs more, that is the signal it has drifted out of
+      scope.</p>
+
+      <h3>No fork button</h3>
+      <p>Spec §10 lists “edit the event inline, hit fork, get a new run.” Excluded.
+      Forking <em>executes the user's agent</em> — a subprocess, live credentials, real
+      cost, and a run that can hang or half-write. That is a different risk surface
+      from a read-only viewer, and the one part of the UI that could damage something.
+      <code>tape fork</code> already does it well from a shell where the output is
+      visible.</p>
+      <p>The UI instead makes forks <em>legible</em>: the tree screen shows lineage, and
+      every screen that could motivate a fork shows the exact <code>tape fork</code>
+      command to copy.</p>
+    </section>
+
+    <section id="arch">
+      <div class="eyebrow">Architecture</div>
+      <h2>The UI is a second renderer</h2>
+      <p>The most important structural fact, and why this milestone is smaller than it
+      looks: <strong>every capability already separates computation from rendering.</strong></p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Capability</th><th>Pure computation — reused as-is</th><th>Terminal renderer — not reused</th></tr></thead>
+          <tbody>
+            <tr><td>Context view</td><td><code>context.from_event()</code> → <code>Context</code></td><td><code>context.render()</code></td></tr>
+            <tr><td>Context diff</td><td><code>context.diff()</code> → <code>List[Change]</code></td><td><code>context.render_diff()</code></td></tr>
+            <tr><td>Run diff</td><td><code>tracediff.diff()</code> → <code>TraceDiff</code></td><td><code>tracediff.render()</code></td></tr>
+            <tr><td>Doctor</td><td><code>doctor.analyse()</code> → <code>Report</code></td><td><code>doctor.render()</code></td></tr>
+            <tr><td>Chain tree</td><td><code>chain</code> events' <code>path</code> / <code>depth</code></td><td>node tree in <code>tape show</code></td></tr>
+            <tr><td>Lineage</td><td><code>header.forked_from</code> / <code>fork_at</code></td><td><code>tape ls</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The server calls <strong>the same function the CLI calls</strong> and serialises
+      the dataclass to JSON. It computes nothing of its own. Three consequences:</p>
+      <ul>
+        <li><strong>“No new event data, no recording changes” holds by construction</strong>,
+        not by discipline. The UI imports from <code>core/</code> and never writes.</li>
+        <li>A UI bug is a rendering bug. If a number is wrong it is wrong in
+        <code>tape show</code> too, and that already has a test.</li>
+        <li><strong>The UI cannot drift from the CLI</strong> — and that is testable.</li>
+      </ul>
+    </section>
+
+    <section id="screens">
+      <div class="eyebrow">Screen inventory · six routes</div>
+      <h2>What each screen renders</h2>
+      <p>Five are the capabilities no other tool has; the first is navigation.</p>
+
+      <div class="panel" id="s0">
+        <header><span class="route">/</span><span class="name">Runs index</span><span class="tag">Navigation</span></header>
+        <div class="body">
+          <p>Deliberately thin. A table with the columns <code>tape ls</code> already
+          prints: run id, when, events, duration, cost, argv, lineage. A forked run
+          shows <code>← 01M0BDHF8JK3MT@1</code> in its own column and the parent is a
+          link. One text box filters on argv and run id.</p>
+          <p><strong>Not here:</strong> totals across runs, charts, “cost this week.”
+          That is the dashboard this is not.</p>
+        </div>
+        <div class="src"><b>Renders from</b><span>each trace's header and footer — no event parsing, so it stays fast with hundreds of runs</span></div>
+      </div>
+
+      <div class="panel" id="s1">
+        <header><span class="route">/run/&lt;id&gt;</span><span class="name">Run view</span><span class="tag">The spine</span></header>
+        <div class="body">
+          <p>Where the arrow keys live. Three regions: a timeline strip, an inspector,
+          and a status bar.</p>
+
+          <div class="mock">
+            <div class="cap">Timeline — x by t_rel, width ∝ dur_ms, colour = kind</div>
+            <div class="track" role="img" aria-label="Timeline of eleven events, the sixth selected">
+              <i style="flex:6;  background:var(--k-chain)"></i>
+              <i style="flex:22; background:var(--k-llm)"></i>
+              <i style="flex:4;  background:var(--k-tool)"></i>
+              <i style="flex:11; background:var(--k-http)"></i>
+              <i style="flex:3;  background:var(--k-mcp)"></i>
+              <i style="flex:31; background:var(--k-llm)" class="sel"></i>
+              <i style="flex:5;  background:var(--k-tool)"></i>
+              <i style="flex:9;  background:var(--k-http)"></i>
+              <i style="flex:2;  background:var(--k-mcp)"></i>
+              <i style="flex:14; background:var(--k-llm)"></i>
+              <i style="flex:4;  background:var(--k-chain)"></i>
+            </div>
+            <div class="ticks" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+            <div class="axis"><span>0.00s</span><span>event 5 of 11 · 842ms</span><span>43.2s</span></div>
+            <div class="legend">
+              <span><b style="background:var(--k-llm)"></b>llm</span>
+              <span><b style="background:var(--k-http)"></b>http</span>
+              <span><b style="background:var(--k-tool)"></b>tool</span>
+              <span><b style="background:var(--k-mcp)"></b>mcp</span>
+              <span><b style="background:var(--k-chain)"></b>chain</span>
+              <span><b style="background:var(--k-amb)"></b>rand · time · uuid</span>
+            </div>
+          </div>
+
+          <p>Ambient events are near-zero duration, so they render as 2px ticks on a
+          sub-track rather than invisible slivers. Above roughly 2,000 events the
+          track buckets by time and a block becomes “n events”; scrubbing then steps
+          bucket to bucket until you zoom. Traces that large are ordinary — an agent
+          in a loop reads the clock hundreds of times.</p>
+
+          <p>The <strong>inspector</strong> shows the selected event in one of three
+          modes: <code>raw</code> (event JSON, blobs resolved and marked
+          <code>blob:sha256…</code> so you can see what was externalised),
+          <code>context</code>, or <code>diff</code>.</p>
+
+          <p>The <strong>status bar</strong> carries event <em>i</em> of <em>n</em>, kind,
+          call site, duration, model, tokens and cost — and when cost is null, <em>why</em>
+          (<code>no price row: Claude-on-Bedrock routing tier</code>), because a blank
+          cost otherwise reads as a bug.</p>
+        </div>
+        <div class="src"><b>Renders from</b><span><code>Trace.events</code>, plus the decoder enrichment already on each event</span></div>
+      </div>
+
+      <div class="panel" id="s2">
+        <header><span class="route">/run/&lt;id&gt; · c · d</span><span class="name">Context &amp; context diff</span><span class="tag">Highest value</span></header>
+        <div class="body">
+          <p><strong>The sleeper feature, and the one to get right.</strong> Most agent
+          bugs are context bugs, and nothing else shows the exact bytes the model
+          received.</p>
+          <p><strong>Context mode</strong> renders a <code>Context</code>: the full message
+          array, one collapsible card per message with role, char count, and tool calls
+          broken out as structured rows rather than buried in JSON. The completion sits
+          below the input, visually separated — it is the one thing that came
+          <em>back</em>.</p>
+          <p><strong>Diff mode</strong> picks a baseline (default: the previous LLM event,
+          any earlier event selectable) and renders <code>List[Change]</code>.</p>
+
+          <div class="mock">
+            <div class="cap">Diff mode — gutter carries status, not colour alone</div>
+            <div class="diff">
+              <div class="row same"><span class="g">=</span><span>[0] system · unchanged · 43 chars</span></div>
+              <div class="row trunc">
+                <span class="g">~</span>
+                <span>[1] user · 791 → 280 chars <span class="flag">TRUNCATED</span>
+                  <div class="kept">kept  “Here are the files in the folder: report_10…”</div>
+                  <div class="lost">lost  511 chars — report_11.pdf … invoice.pdf</div>
+                </span>
+              </div>
+              <div class="row same"><span class="g">=</span><span>[2] assistant · unchanged · 32 chars</span></div>
+            </div>
+          </div>
+
+          <p><strong>Truncation gets its own treatment.</strong> <code>Change.truncated</code>
+          is already computed — a message that survived but lost most of itself — and
+          <code>Change.kept_prefix</code> says the new text is the old one cut short. When
+          both hold, the card is flagged and the kept prefix and dropped tail are shown
+          as separate blocks rather than an inline diff, because an inline diff of “the
+          last 500 characters vanished” is unreadable. This is the exact bug the demo
+          GIF is built around; it should be impossible to miss.</p>
+        </div>
+        <div class="src"><b>Renders from</b><span><code>context.from_event()</code> and <code>context.diff()</code> — both already behind <code>tape show --context --diff</code></span></div>
+      </div>
+
+      <div class="panel" id="s3">
+        <header><span class="route">/run/&lt;id&gt;/chain</span><span class="name">Chain tree</span><span class="tag">Conditional</span></header>
+        <div class="body">
+          <p>Present only when the run has <code>chain</code> events; the tab is absent
+          otherwise rather than empty. An indented tree from each node's
+          <code>path</code> and <code>depth</code> — name, type, duration, fan-out.</p>
+          <p><strong>Nested HTTP and LLM events appear as children of the node they
+          happened inside</strong>, which is precisely what the transport layer alone
+          cannot show, and the reason the LangChain adapter exists. Selecting a node
+          selects the matching timeline event so the two views stay in sync.</p>
+          <p>Model nodes are deliberately not recorded — the transport shim already
+          records that crossing, with wire bytes the callback lacks — so a node's LLM
+          child is the <code>llm</code> event at that position. The tree makes that
+          adjacency visible instead of leaving a gap someone reads as a missing node.</p>
+        </div>
+        <div class="src"><b>Renders from</b><span><code>chain</code> events' <code>framework</code>, <code>name</code>, <code>type</code>, <code>path</code>, <code>depth</code>, <code>step</code></span></div>
+      </div>
+
+      <div class="panel" id="s4">
+        <header><span class="route">/tree</span><span class="name">Fork tree</span><span class="tag">Lineage</span></header>
+        <div class="body">
+          <p>A forest. Each root is an unforked run; each child is a run whose header
+          carries <code>forked_from</code>, attached at its <code>fork_at</code> index.</p>
+          <p>Indented tree, not a graph canvas — lineage here is shallow and a canvas
+          would be decoration. Each node shows run id, the patch expressions from its
+          footer's <code>patched</code> list, event count and cost. The edge label is the
+          fork point: <code>@13</code>.</p>
+          <p>Selecting two nodes and pressing <kbd>x</kbd> opens the divergence screen
+          for that pair — the common motion is <em>fork, then compare against the
+          parent</em>.</p>
+        </div>
+        <div class="src"><b>Renders from</b><span>headers across all traces; <code>footer["patched"]</code> for the labels</span></div>
+      </div>
+
+      <div class="panel" id="s5">
+        <header><span class="route">/diff/&lt;a&gt;/&lt;b&gt;</span><span class="name">Divergence</span><span class="tag">Differentiator</span></header>
+        <div class="body">
+          <p><strong>Divergence first</strong>, per spec §8.2 — the differentiator, not a
+          footer. Before any per-field detail: the step where the two runs stopped being
+          the same run, and what each did afterwards.</p>
+          <p>Aligned pairs below it, two columns, <code>Step</code> by <code>Step</code>.
+          Identical stretches collapse to one line — <code>steps 0–12 identical (12
+          events)</code> — not twelve rows.</p>
+          <p>A path split renders differently from a value difference, because it is a
+          different claim: <code>run A called tool·path_a; run B called tool·path_b</code>,
+          with an explicit note that everything after is <em>incomparable, not
+          divergent</em>. Totals footer carries cost and tokens per side, and the deltas.</p>
+        </div>
+        <div class="src"><b>Renders from</b><span><code>tracediff.diff()</code> → <code>steps</code>, <code>find_divergence()</code>, <code>_totals()</code></span></div>
+      </div>
+
+      <div class="panel" id="s6">
+        <header><span class="route">/doctor/&lt;id&gt;</span><span class="name">Doctor findings</span><span class="tag">Read-only</span></header>
+        <div class="body">
+          <p>Reads a report produced by <code>tape doctor --json</code>.
+          <strong>The UI does not run the agent</strong> — doctor executes the user's
+          command N times with real calls and real cost, and a web page must not do that
+          behind a click. The screen says so, and shows the command to run.</p>
+          <p>Findings grouped <strong>by call site</strong>, which is already how
+          <code>analyse()</code> groups them: an agent in a loop reads the clock forty
+          times, and the report should be as long as the number of distinct
+          <em>places</em> it is nondeterministic. Each finding carries site, kind, name,
+          the distinct values observed, a count, and the suggestion. Clicking one jumps
+          to that event in the run view.</p>
+          <p>Path splits are a separate section, for the same reason the terminal report
+          separates them: a split points at code behaving perfectly.</p>
+        </div>
+        <div class="src"><b>Renders from</b><span><code>doctor.Report</code> → <code>Source</code> and <code>Split</code></span></div>
+      </div>
+    </section>
+
+    <section id="keys">
+      <div class="eyebrow">Keyboard</div>
+      <h2>Every action reachable without the mouse</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Key</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td><strong>The primary motion</strong> — previous / next event</td></tr>
+            <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>Same, vim-style</td></tr>
+            <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>First / last event</td></tr>
+            <tr><td><kbd>g</kbd> + digits</td><td>Jump to event N</td></tr>
+            <tr><td><kbd>r</kbd> <kbd>c</kbd> <kbd>d</kbd></td><td>Inspector mode: raw / context / context-diff</td></tr>
+            <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>In diff mode, move the baseline earlier / later</td></tr>
+            <tr><td><kbd>n</kbd> <kbd>p</kbd></td><td>Next / previous event <em>of the same kind</em></td></tr>
+            <tr><td><kbd>f</kbd></td><td>Filter by kind (multi-select)</td></tr>
+            <tr><td><kbd>t</kbd></td><td>Fork tree</td></tr>
+            <tr><td><kbd>x</kbd></td><td>Diff — from the tree, the two selected runs</td></tr>
+            <tr><td><kbd>l</kbd></td><td>Chain tree, when the run has one</td></tr>
+            <tr><td><kbd>y</kbd></td><td>Copy the <code>tape …</code> command for the current view</td></tr>
+            <tr><td><kbd>?</kbd></td><td>Keyboard help overlay</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Back / close overlay</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Arrow-key scrubbing is the interaction the whole layout serves. Selection
+      changes instantly — no transition, no easing. The timeline is the scrubber; the
+      inspector is what it drives.</p>
+    </section>
+
+    <section id="look">
+      <div class="eyebrow">Look</div>
+      <h2>It should read as a profiler</h2>
+      <p>Dark, monospace throughout, no animation beyond instant state changes. Dense,
+      high information per pixel, no empty hero space, no rounded cards with drop
+      shadows.</p>
+      <p>Colour carries exactly one meaning — <strong>event kind</strong> — and is reused
+      nowhere else, so a colour always answers the same question. Selection is an
+      outline; diff status is a gutter character plus a muted background tint
+      (<code>+ − ~ =</code>), which stays legible for the roughly 8% of men with colour
+      vision deficiency and keeps the terminal's own vocabulary.</p>
+      <p>Both themes ship, defaulting to dark, because a projector or a bright room is
+      the one place a dark debugger fails.</p>
+    </section>
+
+    <section id="server">
+      <div class="eyebrow">Server</div>
+      <h2>Safe by construction, not by policy</h2>
+      <p><code>tape ui [--port 7654] [--tape-dir .tape] [--no-open]</code></p>
+      <ul>
+        <li><strong>Binds <code>127.0.0.1</code> explicitly</strong>, never
+        <code>0.0.0.0</code>, and not configurable. Redaction is pattern-matching and
+        best-effort, so the correct assumption is that a trace may still hold something
+        private — which makes “never reachable from the network” load-bearing rather
+        than a default.</li>
+        <li><strong>No auth, no accounts, no sessions</strong> — correct <em>because</em>
+        of the bind, not instead of it.</li>
+        <li><strong>No telemetry, no external requests.</strong> The page loads zero
+        remote assets, so it works offline and cannot phone home — enforced by
+        everything being inlined in one file.</li>
+        <li><strong>Read-only.</strong> No route mutates a trace; there is no write path
+        to audit.</li>
+      </ul>
+    </section>
+
+    <section id="testing">
+      <div class="eyebrow">Testing</div>
+      <h2>Prove the UI cannot drift from the CLI</h2>
+      <p>That claim is the thing worth testing, and it is testable without a browser.</p>
+      <ul>
+        <li><strong>The API equals the CLI.</strong> For a fixture trace,
+        <code>/api/diff/&lt;a&gt;/&lt;b&gt;</code> must carry the same divergence index,
+        step count and totals that <code>tracediff.diff()</code> produced. If the UI ever
+        starts computing its own numbers, this fails.</li>
+        <li><strong>Every route on a fixture trace</strong> — including a run with chain
+        events, a forked run, and an empty run.</li>
+        <li><strong>Truncation reaches the API.</strong> The <code>truncated</code> and
+        <code>kept_prefix</code> flags must survive serialisation, since the headline
+        case is built on them. Driven by <code>examples/truncation_bug.py</code>, which
+        already produces the bug deterministically with no API key.</li>
+        <li><strong>The server binds loopback.</strong> Asserted directly — a connection
+        to the non-loopback address is refused. It is the security claim, so it is a
+        test rather than a comment.</li>
+        <li><strong>No new runtime dependency.</strong> A check that
+        <code>dependencies == []</code> still holds, since the whole no-framework
+        decision is otherwise invisible.</li>
+      </ul>
+      <p>A browser-driven end-to-end test is deliberately not proposed: a heavy dev
+      dependency to cover a layer already covered above.</p>
+    </section>
+
+    <section id="scope">
+      <div class="eyebrow">Scope boundary</div>
+      <h2>What is out, and why</h2>
+      <div class="scroll">
+        <table class="out">
+          <thead><tr><th>Excluded</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>Fork button, inline editing</td><td>Executes the user's agent — cost, credentials, subprocess. <code>tape fork</code> owns it</td></tr>
+            <tr><td>Running doctor from the UI</td><td>Same: real runs, real money, behind a click</td></tr>
+            <tr><td>Aggregate metrics and charts</td><td>The observability product this is not</td></tr>
+            <tr><td>Auth, accounts, sharing, hosted mode</td><td>Loopback-only makes them unnecessary; adding them makes the bind negotiable</td></tr>
+            <tr><td>Live tailing of a running agent</td><td>Traces flush per line so it would work, but it is a second interaction model — its own milestone if wanted</td></tr>
+            <tr><td>Editing or annotating traces</td><td>Read-only is what makes “no recording changes” structural</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="order">
+      <div class="eyebrow">Build order · each step ends usable</div>
+      <h2>Steps 1–3 are the milestone's value</h2>
+      <ol>
+        <li><strong>Server skeleton and runs index.</strong> Proves the stdlib server,
+        the loopback bind, and trace discovery.</li>
+        <li><strong>Run view: timeline, raw inspector, arrow-key scrubbing.</strong> The
+        spine. Already useful at this point.</li>
+        <li><strong>Context and context-diff modes</strong>, truncation treatment
+        included. Where the demo GIF's bug becomes visible.</li>
+        <li><strong>Divergence view.</strong> Reuses <code>tracediff</code> wholesale.</li>
+        <li><strong>Fork tree</strong>, and <kbd>x</kbd> from tree to diff.</li>
+        <li><strong>Chain tree and doctor findings.</strong> Both conditional, both thin
+        over reports that already exist.</li>
+        <li><strong>Help overlay, both themes, README, CHANGELOG.</strong></li>
+      </ol>
+    </section>
+
+    <section id="open">
+      <div class="eyebrow">Open questions</div>
+      <h2>Three things to decide before step 1</h2>
+      <ol>
+        <li><strong>Is the runs index worth a screen at all</strong>, or should
+        <code>tape ui &lt;run&gt;</code> open straight into the run view, with the index as
+        an <kbd>Esc</kbd> overlay? The second is more debugger-like — you usually arrive
+        knowing which run you want.</li>
+        <li><strong>Doctor: read a <code>--json</code> report from a path, or re-run
+        <code>analyse()</code> over stored runs?</strong> Doctor keeps its runs, so the
+        second needs no new data and no execution — but a report is a <em>pair</em> of
+        runs and the UI would have to infer which. Leaning toward reading the JSON.</li>
+        <li><strong>The 2,000-event bucketing threshold is a guess.</strong> It should be
+        measured against a real long agent run before it is fixed.</li>
+      </ol>
+    </section>
+
+    <footer>
+      reeltime M11 · design for review · no frontend written yet<br>
+      supersedes tapedeck-spec §10 on the server framework and the fork button
+    </footer>
+  </main>
+</div>
