@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tape ui</title>
+<style>
+:root {
+  --ground:#14120F; --panel:#1D1A16; --raised:#252118;
+  --line:#2E2922; --line2:#3D3629;
+  --ink:#EDE7DC; --mid:#B7AD9D; --dim:#8A8073;
+  --oxide:#D98A2B; --tape:#6FA8A0;
+  --k-llm:#D98A2B; --k-http:#6FA8A0; --k-tool:#A38BC4;
+  --k-mcp:#7FA65C; --k-chain:#6A93C4; --k-rand:#6E6559;
+  --k-time:#6E6559; --k-uuid:#6E6559;
+  --add:#7FA65C; --del:#C4685C; --chg:#D98A2B;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+html[data-theme="light"] {
+  --ground:#EFEDE8; --panel:#F7F6F3; --raised:#FFFFFF;
+  --line:#DCD8D0; --line2:#C6C0B4;
+  --ink:#1A1713; --mid:#4E483F; --dim:#726B60;
+  --oxide:#9A5A11; --tape:#2F6A62;
+  --k-llm:#9A5A11; --k-http:#2F6A62; --k-tool:#5F4A82;
+  --k-mcp:#4A6B2C; --k-chain:#33578A; --k-rand:#8A8377;
+  --k-time:#8A8377; --k-uuid:#8A8377;
+  --add:#4A6B2C; --del:#9A3E32; --chg:#8A5A0E;
+}
+* { box-sizing:border-box; }
+html, body { height:100%; }
+body {
+  margin:0; background:var(--ground); color:var(--ink);
+  font:13px/1.5 var(--mono); overflow:hidden;
+}
+#app { display:grid; grid-template-rows:auto auto 1fr auto; height:100vh; }
+
+/* -- header ------------------------------------------------------------ */
+header {
+  display:flex; align-items:center; gap:1rem; padding:.5rem .9rem;
+  background:var(--raised); border-bottom:1px solid var(--line);
+}
+header .id { color:var(--oxide); font-weight:600; }
+header .argv { color:var(--dim); overflow:hidden; text-overflow:ellipsis;
+               white-space:nowrap; flex:1; min-width:0; }
+header .tabs { display:flex; gap:.3rem; }
+header button, .btn {
+  font:inherit; color:var(--mid); background:transparent;
+  border:1px solid var(--line2); border-radius:2px;
+  padding:.15rem .5rem; cursor:pointer;
+}
+header button[aria-pressed="true"] { color:var(--ground); background:var(--oxide);
+                                     border-color:var(--oxide); }
+header button:hover, .btn:hover { color:var(--ink); }
+header button:focus-visible, .btn:focus-visible,
+a:focus-visible, [tabindex]:focus-visible {
+  outline:2px solid var(--oxide); outline-offset:1px;
+}
+
+/* -- timeline ---------------------------------------------------------- */
+#strip { padding:.55rem .9rem .4rem; border-bottom:1px solid var(--line);
+         background:var(--panel); }
+#track { display:flex; gap:2px; height:26px; }
+#track b {
+  display:block; border-radius:1px; opacity:.8; cursor:pointer;
+  border:1px solid transparent;
+}
+#track b.sel { opacity:1; outline:2px solid var(--ink); outline-offset:1px; }
+#track b.bucket { background:var(--line2); opacity:.65; }
+#ticks { display:flex; gap:2px; height:6px; margin-top:3px; }
+#ticks b { width:2px; background:var(--k-rand); border-radius:1px; cursor:pointer; }
+#ticks b.sel { background:var(--ink); }
+#axis { display:flex; justify-content:space-between; color:var(--dim);
+        font-size:11px; margin-top:4px; }
+
+/* -- main -------------------------------------------------------------- */
+main { overflow:auto; padding:.9rem; }
+.pane { max-width:100%; }
+pre { margin:0; white-space:pre-wrap; word-break:break-word; color:var(--mid); }
+h2 { font-size:13px; margin:0 0 .5rem; color:var(--ink); letter-spacing:.04em; }
+.muted { color:var(--dim); }
+.kv { display:grid; grid-template-columns:max-content 1fr; gap:.15rem .8rem; }
+.kv dt { color:var(--dim); }
+.kv dd { margin:0; color:var(--mid); word-break:break-word; }
+
+/* -- messages ---------------------------------------------------------- */
+.msg { border:1px solid var(--line); border-radius:2px; margin-bottom:.5rem;
+       background:var(--panel); }
+.msg > summary { padding:.35rem .6rem; cursor:pointer; color:var(--mid);
+                 display:flex; gap:.6rem; align-items:baseline; }
+.msg > summary::-webkit-details-marker { display:none; }
+.msg .role { color:var(--oxide); min-width:5.5rem; }
+.msg .body { padding:.5rem .6rem; border-top:1px solid var(--line); }
+.msg .tc { color:var(--k-tool); }
+
+/* -- diff -------------------------------------------------------------- */
+.row { display:grid; grid-template-columns:1.3rem 1fr; gap:.5rem;
+       border-left:2px solid transparent; padding:.3rem .5rem;
+       margin-bottom:.25rem; background:var(--panel); }
+.row .g { color:var(--dim); text-align:center; }
+.row.added { border-left-color:var(--add); }
+.row.added .g { color:var(--add); }
+.row.dropped { border-left-color:var(--del); }
+.row.dropped .g { color:var(--del); }
+.row.changed { border-left-color:var(--chg); }
+.row.changed .g { color:var(--chg); }
+.row.same { background:transparent; color:var(--dim); }
+.row.trunc { border-left-color:var(--del);
+             background:color-mix(in srgb, var(--del) 12%, var(--panel)); }
+.flag { color:var(--del); border:1px solid var(--del); border-radius:2px;
+        padding:0 .3rem; font-size:11px; letter-spacing:.1em; margin-left:.4rem; }
+.kept { color:var(--add); } .lost { color:var(--del); opacity:.9; }
+.ins { background:color-mix(in srgb, var(--add) 28%, transparent); }
+.del { background:color-mix(in srgb, var(--del) 28%, transparent);
+       text-decoration:line-through; }
+
+/* -- tables / trees ---------------------------------------------------- */
+table { border-collapse:collapse; width:100%; }
+th, td { text-align:left; padding:.3rem .6rem; border-bottom:1px solid var(--line);
+         vertical-align:top; }
+th { color:var(--dim); font-weight:400; font-size:11px; letter-spacing:.1em;
+     text-transform:uppercase; }
+tbody tr { cursor:pointer; }
+tbody tr:hover { background:var(--panel); }
+tbody tr.sel { background:var(--raised); outline:1px solid var(--oxide); }
+.num { text-align:right; font-variant-numeric:tabular-nums; }
+.node { display:flex; gap:.5rem; padding:.15rem 0; align-items:baseline; }
+.node .dur { color:var(--dim); font-size:11px; }
+.cmd { background:var(--raised); border:1px solid var(--line2);
+       border-radius:2px; padding:.4rem .6rem; color:var(--tape);
+       display:flex; gap:.6rem; align-items:center; margin:.5rem 0; }
+.cmd code { flex:1; word-break:break-all; }
+
+/* -- status ------------------------------------------------------------ */
+footer {
+  display:flex; gap:1rem; padding:.4rem .9rem; background:var(--raised);
+  border-top:1px solid var(--line); color:var(--dim); font-size:12px;
+  align-items:center; flex-wrap:wrap;
+}
+footer .why { color:var(--chg); }
+footer .sp { flex:1; }
+
+/* -- overlay ----------------------------------------------------------- */
+#overlay {
+  position:fixed; inset:0; background:color-mix(in srgb, var(--ground) 92%, transparent);
+  display:none; padding:3rem 1rem; overflow:auto; z-index:10;
+}
+#overlay.on { display:block; }
+#overlay .box { max-width:60rem; margin:0 auto; background:var(--panel);
+                border:1px solid var(--line2); border-radius:3px; padding:1rem; }
+#filter { font:inherit; width:100%; background:var(--ground); color:var(--ink);
+          border:1px solid var(--line2); border-radius:2px; padding:.4rem .6rem;
+          margin-bottom:.6rem; }
+kbd { background:var(--raised); border:1px solid var(--line2);
+      border-bottom-width:2px; border-radius:3px; padding:0 .3rem; color:var(--ink); }
+.keys { display:grid; grid-template-columns:max-content 1fr; gap:.25rem 1rem; }
+.keys div:nth-child(even) { color:var(--mid); }
+@media (prefers-reduced-motion:reduce) { * { transition:none!important; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="id" id="runid">—</span>
+    <span class="argv" id="argv"></span>
+    <span class="tabs" id="tabs"></span>
+    <button id="themebtn" title="Toggle theme">◐</button>
+  </header>
+
+  <div id="strip">
+    <div id="track"></div>
+    <div id="ticks"></div>
+    <div id="axis"><span id="t0">0.00s</span><span id="tsel"></span><span id="t1"></span></div>
+  </div>
+
+  <main><div class="pane" id="pane"></div></main>
+
+  <footer>
+    <span id="pos">—</span>
+    <span id="kind"></span>
+    <span id="site" class="muted"></span>
+    <span class="sp"></span>
+    <span id="model"></span>
+    <span id="tokens"></span>
+    <span id="cost"></span>
+  </footer>
+</div>
+
+<div id="overlay"><div class="box" id="obox"></div></div>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------------
+ * Timeline layout.
+ *
+ * Blocks are laid out proportionally to duration, but with a hard floor of
+ * FLOOR px each -- and the floor is not a nicety, it is what makes the strip
+ * work at all. Measured (tools/measure_timeline.py, 2026-08-21): with pure
+ * `flex: <dur>` and a realistic agent mix, 38% of blocks fall under 3px at
+ * only 50 events, and >10% do so at *eleven*. A 1ms tool call beside a 1400ms
+ * model call gets 1/1400th of the width. Proportional-only is unusable.
+ *
+ * With the floor applied, the strip saturates when there is no room for
+ * another block at any width:
+ *
+ *     BUCKET_AT = strip_width / (FLOOR + GAP)      # 1200/5 = 240 @ 1200px
+ *
+ * so the threshold is computed from the live width rather than hardcoded --
+ * a wider window really does show more events. Beyond it, blocks are bucketed
+ * and scrubbing steps bucket to bucket.
+ *
+ * Note the second finding from the same measurement: proportionality degrades
+ * before saturation. At 200 events the widest block is only ~2x the narrowest
+ * though the real durations differ by ~787x. The strip is a *map*, not a
+ * measurement -- read durations off the status bar.
+ * ------------------------------------------------------------------- */
+var FLOOR = 3, GAP = 2;
+var AMBIENT = {rand:1, time:1, uuid:1};
+
+var S = {run:null, events:[], sel:0, view:"raw", baseline:null,
+         ctx:null, chain:null, runs:[], tapeDir:""};
+
+function $(id) { return document.getElementById(id); }
+function el(tag, cls, text) {
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  return n;
+}
+function api(path) {
+  return fetch(path).then(function (r) {
+    return r.json().then(function (j) {
+      if (!r.ok) throw new Error(j.error || r.status);
+      return j;
+    });
+  });
+}
+function esc(s) { var d = el("span", null, s); return d.innerHTML; }
+function ms(v) { return v === null || v === undefined ? "—" : (v < 1 ? v.toFixed(2) : Math.round(v)) + "ms"; }
+function usd(v) { return v === null || v === undefined ? null : "$" + Number(v).toFixed(4); }
+
+/* -- timeline ---------------------------------------------------------- */
+function mainEvents() {
+  return S.events.filter(function (e) { return !AMBIENT[e.kind]; });
+}
+function bucketLimit() {
+  var w = $("track").clientWidth || 1200;
+  return Math.max(8, Math.floor(w / (FLOOR + GAP)));
+}
+
+function drawTrack() {
+  var track = $("track"), ticks = $("ticks");
+  track.textContent = ""; ticks.textContent = "";
+  var main = mainEvents(), limit = bucketLimit();
+
+  if (main.length > limit) {
+    var per = Math.ceil(main.length / limit);
+    for (var i = 0; i < main.length; i += per) {
+      var group = main.slice(i, i + per);
+      var b = el("b", "bucket");
+      b.style.flex = "1";
+      b.title = group.length + " events · " + group[0].i + "–" + group[group.length - 1].i;
+      if (group.some(function (e) { return e.i === S.sel; })) b.className = "bucket sel";
+      b.onclick = (function (g) { return function () { select(g[0].i); }; })(group);
+      track.appendChild(b);
+    }
+  } else {
+    var total = main.reduce(function (a, e) { return a + (e.dur_ms || 0); }, 0) || 1;
+    main.forEach(function (e) {
+      var b = el("b", e.i === S.sel ? "sel" : "");
+      b.style.background = "var(--k-" + e.kind + ", var(--k-http))";
+      b.style.flex = FLOOR + " 0 auto";
+      b.style.width = FLOOR + "px";
+      b.style.flexGrow = String(1 + 200 * ((e.dur_ms || 0) / total));
+      b.title = "#" + e.i + " " + e.kind + " " + ms(e.dur_ms) + "  " + e.site;
+      b.onclick = (function (n) { return function () { select(n); }; })(e.i);
+      track.appendChild(b);
+    });
+  }
+
+  S.events.filter(function (e) { return AMBIENT[e.kind]; }).forEach(function (e) {
+    var t = el("b", e.i === S.sel ? "sel" : "");
+    t.title = "#" + e.i + " " + e.kind + "  " + e.site;
+    t.onclick = (function (n) { return function () { select(n); }; })(e.i);
+    ticks.appendChild(t);
+  });
+
+  var last = S.events[S.events.length - 1];
+  $("t1").textContent = last ? (last.t_rel || 0).toFixed(2) + "s" : "";
+}
+
+/* -- status bar -------------------------------------------------------- */
+function drawStatus() {
+  var e = S.events.find(function (x) { return x.i === S.sel; });
+  $("pos").textContent = S.events.length ? "event " + S.sel + " of " + (S.events.length - 1) : "no events";
+  if (!e) { $("kind").textContent = ""; return; }
+  $("kind").textContent = e.kind;
+  $("site").textContent = e.site || "";
+  $("tsel").textContent = ms(e.dur_ms);
+  var req = e.req || {}, res = e.res || {}, meta = e.meta || {};
+  $("model").textContent = req.model || "";
+  var tk = res.tokens;
+  $("tokens").textContent = tk ? (tk["in"] + "→" + tk.out + " tok") : "";
+  var c = $("cost");
+  c.className = ""; c.textContent = "";
+  if (meta.cost_usd !== undefined && meta.cost_usd !== null) {
+    c.textContent = usd(meta.cost_usd);
+  } else if (tk) {
+    /* A blank cost otherwise reads as a bug. Say which case this is. */
+    c.className = "why";
+    c.textContent = "no price row for " + (req.model || "this model");
+    c.title = "pricing.py carries no row for this model id, so cost is null "
+            + "rather than guessed — see README, “What this can’t replay”.";
+  }
+}
+
+/* -- views ------------------------------------------------------------- */
+var VIEWS = [["raw", "r", "Event"], ["context", "c", "Context"],
+             ["diff", "d", "Context diff"], ["chain", "l", "Chain"],
+             ["tree", "t", "Fork tree"], ["doctor", "?", "Doctor"]];
+
+function drawTabs() {
+  var t = $("tabs"); t.textContent = "";
+  VIEWS.forEach(function (v) {
+    if (v[0] === "chain" && !(S.run && S.run.summary.has_chain)) return;
+    var b = el("button", null, v[2]);
+    b.setAttribute("aria-pressed", S.view === v[0] ? "true" : "false");
+    b.onclick = function () { setView(v[0]); };
+    t.appendChild(b);
+  });
+}
+
+function setView(v) { S.view = v; drawTabs(); render(); }
+
+function render() {
+  var pane = $("pane");
+  pane.textContent = "";
+  if (S.view === "raw") return renderRaw(pane);
+  if (S.view === "context" || S.view === "diff") return renderContext(pane);
+  if (S.view === "chain") return renderChain(pane);
+  if (S.view === "tree") return renderTree(pane);
+  if (S.view === "doctor") return renderDoctor(pane);
+}
+
+function renderRaw(pane) {
+  var e = S.events.find(function (x) { return x.i === S.sel; });
+  if (!e) { pane.appendChild(el("p", "muted", "This run recorded no events.")); return; }
+  pane.appendChild(el("h2", null, "Event " + e.i + " · " + e.kind));
+  var pre = el("pre", null, JSON.stringify(e, null, 2));
+  pane.appendChild(pre);
+}
+
+function renderContext(pane) {
+  var url = "/api/run/" + S.run.summary.run_id + "/context/" + S.sel;
+  if (S.view === "diff" && S.baseline !== null) url += "?baseline=" + S.baseline;
+  api(url).then(function (d) {
+    pane.textContent = "";
+    var c = d.context;
+    var head = el("h2", null, "Context at event " + c.event_index
+      + (c.model ? " · " + c.model : "") + " · " + c.messages.length + " messages, "
+      + c.total_chars.toLocaleString() + " chars");
+    pane.appendChild(head);
+
+    if (S.view === "diff") {
+      if (S.baseline === null) {
+        pane.appendChild(el("p", "muted",
+          "No baseline yet — press [ to pick the previous context event."));
+        return;
+      }
+      pane.appendChild(el("p", "muted", "against event " + S.baseline
+        + " · [ and ] move the baseline"));
+      d.changes.forEach(function (ch) { pane.appendChild(changeRow(ch)); });
+      return;
+    }
+    c.messages.forEach(function (m) { pane.appendChild(messageCard(m)); });
+    if (c.completion) {
+      pane.appendChild(el("h2", null, "Completion"));
+      var box = el("div", "msg");
+      box.appendChild(el("div", "body", c.completion));
+      pane.appendChild(box);
+    }
+  }).catch(function (err) {
+    pane.textContent = "";
+    pane.appendChild(el("p", "muted", String(err.message || err)));
+  });
+}
+
+function messageCard(m) {
+  var d = el("details", "msg");
+  d.open = m.chars < 900;
+  var s = el("summary");
+  s.appendChild(el("span", "role", "[" + m.index + "] " + m.role));
+  s.appendChild(el("span", "muted", m.shape));
+  d.appendChild(s);
+  var body = el("div", "body");
+  if (m.text) body.appendChild(el("div", null, m.text));
+  m.tool_calls.forEach(function (tc) {
+    body.appendChild(el("div", "tc", "→ " + tc.render));
+  });
+  d.appendChild(body);
+  return d;
+}
+
+/* Truncation is the case this whole view exists to catch, so it is rendered
+   as kept-prefix and lost-tail rather than as an inline diff: an inline diff
+   of "the last 500 characters vanished" is unreadable. */
+function changeRow(ch) {
+  var trunc = ch.truncated;
+  var row = el("div", "row " + ch.kind + (trunc ? " trunc" : ""));
+  row.appendChild(el("span", "g", {same:"=", added:"+", dropped:"−", changed:"~"}[ch.kind]));
+  var body = el("span");
+  var m = ch.after || ch.before;
+  var head = el("div");
+  head.appendChild(document.createTextNode("[" + m.index + "] " + m.role + " · "));
+  if (ch.kind === "changed") {
+    head.appendChild(document.createTextNode(
+      ch.before.chars.toLocaleString() + " → " + ch.after.chars.toLocaleString() + " chars"));
+  } else {
+    head.appendChild(document.createTextNode(m.shape));
+  }
+  if (trunc) { var f = el("span", "flag", "TRUNCATED"); head.appendChild(f); }
+  body.appendChild(head);
+
+  if (trunc && ch.kept_prefix) {
+    body.appendChild(el("div", "kept", "kept  " + preview(ch.after.text)));
+    body.appendChild(el("div", "lost", "lost  "
+      + (ch.before.chars - ch.after.chars).toLocaleString() + " chars — "
+      + preview(ch.before.text.slice(ch.after.text.length))));
+  } else if (ch.kind === "changed") {
+    body.appendChild(inlineDiff(ch.before.text, ch.after.text));
+  } else if (ch.kind !== "same" && m.text) {
+    body.appendChild(el("div", "muted", preview(m.text)));
+  }
+  row.appendChild(body);
+  return row;
+}
+
+function preview(t) {
+  t = (t || "").replace(/\s+/g, " ").trim();
+  return t.length > 120 ? t.slice(0, 119) + "…" : t;
+}
+
+/* Word-level, longest-common-subsequence free: a simple prefix/suffix trim is
+   enough for prompt edits and cannot mis-align the way a naive diff can. */
+function inlineDiff(a, b) {
+  var A = (a || "").split(/(\s+)/), B = (b || "").split(/(\s+)/);
+  var s = 0; while (s < A.length && s < B.length && A[s] === B[s]) s++;
+  var e = 0; while (e < A.length - s && e < B.length - s
+                    && A[A.length - 1 - e] === B[B.length - 1 - e]) e++;
+  var out = el("div");
+  out.appendChild(document.createTextNode(A.slice(0, s).join("")));
+  var removed = A.slice(s, A.length - e).join("");
+  var added = B.slice(s, B.length - e).join("");
+  if (removed) out.appendChild(el("span", "del", removed));
+  if (added) out.appendChild(el("span", "ins", added));
+  out.appendChild(document.createTextNode(A.slice(A.length - e).join("")));
+  return out;
+}
+
+function renderChain(pane) {
+  api("/api/run/" + S.run.summary.run_id + "/chain").then(function (d) {
+    pane.textContent = "";
+    pane.appendChild(el("h2", null, "Chain tree"));
+    pane.appendChild(el("p", "muted",
+      "Boundary events nest inside the node they happened in — the thing the "
+      + "transport layer alone cannot show."));
+    d.rows.forEach(function (r) {
+      var n = el("div", "node");
+      n.style.paddingLeft = (r.depth * 1.4) + "rem";
+      n.tabIndex = 0;
+      if (r.node) {
+        n.appendChild(el("span", null, "▸ " + (r.name || "?")));
+        n.appendChild(el("span", "muted", r.type || ""));
+        if (r.fan_out) n.appendChild(el("span", "muted", "fan-out " + r.fan_out));
+      } else {
+        var dot = el("span", null, "•  " + r.kind);
+        dot.style.color = "var(--k-" + r.kind + ", var(--mid))";
+        n.appendChild(dot);
+      }
+      n.appendChild(el("span", "dur", ms(r.dur_ms)));
+      if (r.i === S.sel) n.style.outline = "1px solid var(--oxide)";
+      n.onclick = function () { select(r.i); };
+      pane.appendChild(n);
+    });
+  }).catch(function (e) {
+    pane.appendChild(el("p", "muted", String(e.message || e)));
+  });
+}
+
+function renderTree(pane) {
+  api("/api/tree").then(function (d) {
+    pane.textContent = "";
+    pane.appendChild(el("h2", null, "Fork tree"));
+    pane.appendChild(el("p", "muted",
+      "Select two runs with x to diff them. Forking itself stays in the shell — "
+      + "it spawns your agent with live credentials."));
+    var sel = [];
+    function walk(node, depth) {
+      var n = el("div", "node");
+      n.style.paddingLeft = (depth * 1.5) + "rem";
+      n.tabIndex = 0;
+      var label = el("span", null, node.run_id);
+      if (node.run_id === S.run.summary.run_id) label.style.color = "var(--oxide)";
+      n.appendChild(label);
+      if (node.fork_at !== null && node.fork_at !== undefined) {
+        n.appendChild(el("span", "muted", "@" + node.fork_at));
+      }
+      (node.patched || []).forEach(function (p) {
+        n.appendChild(el("span", "tc", p));
+      });
+      n.appendChild(el("span", "dur", node.events + " events"));
+      if (node.cost_usd) n.appendChild(el("span", "dur", usd(node.cost_usd)));
+      n.onclick = function () { open("/run/" + node.run_id); };
+      pane.appendChild(n);
+      (node.children || []).forEach(function (c) { walk(c, depth + 1); });
+    }
+    d.roots.forEach(function (r) { walk(r, 0); });
+  });
+}
+
+function renderDoctor(pane) {
+  api("/api/comparable").then(function (d) {
+    pane.textContent = "";
+    pane.appendChild(el("h2", null, "Doctor"));
+    pane.appendChild(el("p", "muted",
+      "Findings are recomputed from stored runs every time this opens — a cached "
+      + "report can show findings for code you already fixed."));
+    var cmd = el("div", "cmd");
+    cmd.appendChild(el("span", "muted", "to record new runs:"));
+    cmd.appendChild(el("code", null, "tape doctor " + (S.run.summary.argv || []).join(" ")));
+    pane.appendChild(cmd);
+    pane.appendChild(el("p", "muted",
+      "The viewer never runs your agent: doctor makes real calls that cost real "
+      + "money, which must not sit behind a click."));
+
+    if (!d.groups.length) {
+      pane.appendChild(el("p", "muted",
+        "No two runs of the same command are recorded yet, so there is nothing "
+        + "to compare."));
+      return;
+    }
+    d.groups.forEach(function (g) {
+      var h = el("h2", null, g.argv);
+      pane.appendChild(h);
+      var ids = g.runs.map(function (r) { return r.run_id; }).slice(0, 4);
+      api("/api/doctor?runs=" + ids.join(",")).then(function (rep) {
+        if (rep.clean) {
+          pane.appendChild(el("p", "muted", "No nondeterminism found across "
+            + ids.length + " runs."));
+        }
+        rep.sources.forEach(function (s) {
+          var box = el("div", "row changed");
+          box.appendChild(el("span", "g", "!"));
+          var b = el("span");
+          b.appendChild(el("div", null, s.site + "   " + (s.name ? s.kind + "·" + s.name : s.kind)));
+          b.appendChild(el("div", "muted", s.detail));
+          b.appendChild(el("div", "kept", s.suggestion));
+          box.appendChild(b);
+          pane.appendChild(box);
+        });
+        if (rep.split) {
+          var sp = el("div", "row dropped");
+          sp.appendChild(el("span", "g", "⋯"));
+          sp.appendChild(el("span", null, "runs stopped making the same calls at step "
+            + rep.split.step + " — everything after is incomparable, not divergent"));
+          pane.appendChild(sp);
+        }
+      });
+    });
+  });
+}
+
+/* -- overlay (the runs index) ------------------------------------------ */
+function toggleOverlay(force) {
+  var o = $("overlay");
+  var on = force !== undefined ? force : !o.classList.contains("on");
+  o.classList.toggle("on", on);
+  if (on) drawOverlay();
+}
+
+function drawOverlay() {
+  var box = $("obox");
+  box.textContent = "";
+  box.appendChild(el("h2", null, "Runs · " + S.tapeDir));
+  var input = el("input", null); input.id = "filter";
+  input.placeholder = "filter by run id or command…";
+  box.appendChild(input);
+  var table = el("table");
+  var thead = el("thead");
+  var hr = el("tr");
+  ["run", "started", "events", "duration", "cost", "command", "from"].forEach(function (h) {
+    hr.appendChild(el("th", null, h));
+  });
+  thead.appendChild(hr); table.appendChild(thead);
+  var tbody = el("tbody"); table.appendChild(tbody);
+  box.appendChild(table);
+
+  function fill(q) {
+    tbody.textContent = "";
+    S.runs.filter(function (r) {
+      return !q || (r.run_id + " " + (r.argv || []).join(" ")).toLowerCase()
+        .indexOf(q.toLowerCase()) >= 0;
+    }).forEach(function (r) {
+      var tr = el("tr");
+      if (S.run && r.run_id === S.run.summary.run_id) tr.className = "sel";
+      tr.appendChild(el("td", null, r.run_id));
+      tr.appendChild(el("td", "muted", (r.started || "").replace("T", " ").slice(0, 19)));
+      tr.appendChild(el("td", "num", r.events));
+      tr.appendChild(el("td", "num", r.duration_s ? r.duration_s.toFixed(2) + "s" : "—"));
+      tr.appendChild(el("td", "num", usd(r.cost_usd) || "—"));
+      tr.appendChild(el("td", "muted", (r.argv || []).join(" ")));
+      tr.appendChild(el("td", "muted",
+        r.forked_from ? r.forked_from + "@" + r.fork_at : ""));
+      tr.onclick = function () { open("/run/" + r.run_id); toggleOverlay(false); };
+      tbody.appendChild(tr);
+    });
+  }
+  input.oninput = function () { fill(input.value); };
+  fill("");
+  input.focus();
+}
+
+function helpOverlay() {
+  var box = $("obox");
+  box.textContent = "";
+  box.appendChild(el("h2", null, "Keys"));
+  var g = el("div", "keys");
+  [["← →  j k", "previous / next event"], ["Home End", "first / last"],
+   ["g then digits", "jump to event N"], ["r c d", "event · context · context diff"],
+   ["[ ]", "move the diff baseline"], ["n p", "next / previous of the same kind"],
+   ["l", "chain tree"], ["t", "fork tree"], ["o", "runs overlay"],
+   ["y", "copy the tape command for this view"], ["?", "this help"],
+   ["Esc", "close"]].forEach(function (r) {
+    var k = el("div"); k.appendChild(el("kbd", null, r[0]));
+    g.appendChild(k); g.appendChild(el("div", null, r[1]));
+  });
+  box.appendChild(g);
+  $("overlay").classList.add("on");
+}
+
+/* -- navigation -------------------------------------------------------- */
+function select(i) {
+  if (!S.events.length) return;
+  var ids = S.events.map(function (e) { return e.i; });
+  if (ids.indexOf(i) < 0) return;
+  S.sel = i;
+  drawTrack(); drawStatus();
+  if (S.view === "raw" || S.view === "context" || S.view === "diff") render();
+}
+
+function step(delta) {
+  var ids = S.events.map(function (e) { return e.i; });
+  var at = ids.indexOf(S.sel);
+  select(ids[Math.min(ids.length - 1, Math.max(0, at + delta))]);
+}
+
+function stepKind(delta) {
+  var e = S.events.find(function (x) { return x.i === S.sel; });
+  if (!e) return;
+  var same = S.events.filter(function (x) { return x.kind === e.kind; })
+                     .map(function (x) { return x.i; });
+  var at = same.indexOf(S.sel);
+  select(same[Math.min(same.length - 1, Math.max(0, at + delta))]);
+}
+
+function contextIndices() {
+  return S.events.filter(function (e) { return e.has_context; })
+                 .map(function (e) { return e.i; });
+}
+
+function moveBaseline(delta) {
+  var opts = contextIndices().filter(function (i) { return i < S.sel; });
+  if (!opts.length) return;
+  if (S.baseline === null) S.baseline = opts[opts.length - 1];
+  else {
+    var at = opts.indexOf(S.baseline);
+    S.baseline = opts[Math.min(opts.length - 1, Math.max(0, at + delta))];
+  }
+  render();
+}
+
+function currentCommand() {
+  var id = S.run ? S.run.summary.run_id : "";
+  if (S.view === "context") return "tape show " + id + " " + S.sel + " --context";
+  if (S.view === "diff") return "tape show " + id + " " + S.sel + " --context --diff "
+    + (S.baseline === null ? 0 : S.baseline);
+  if (S.view === "tree") return "tape ls";
+  if (S.view === "doctor") return "tape doctor " + (S.run.summary.argv || []).join(" ");
+  return "tape show " + id + " " + S.sel;
+}
+
+function open(path) {
+  var id = path.split("/")[2];
+  history.pushState({}, "", path);
+  load(id);
+}
+
+function load(runId) {
+  api("/api/run/" + runId).then(function (d) {
+    S.run = d; S.events = d.events;
+    S.sel = d.events.length ? d.events[0].i : 0;
+    S.baseline = null;
+    $("runid").textContent = d.summary.run_id;
+    $("argv").textContent = (d.summary.argv || []).join(" ");
+    document.title = "tape ui · " + d.summary.run_id;
+    drawTabs(); drawTrack(); drawStatus(); render();
+  }).catch(function (e) {
+    $("pane").textContent = "";
+    $("pane").appendChild(el("p", "muted", String(e.message || e)));
+  });
+}
+
+var digits = "";
+document.addEventListener("keydown", function (ev) {
+  if (ev.target.tagName === "INPUT") {
+    if (ev.key === "Escape") { toggleOverlay(false); ev.target.blur(); }
+    return;
+  }
+  var k = ev.key;
+  if (k === "Escape") return toggleOverlay(false);
+  if (k === "?") { helpOverlay(); return; }
+  if (k === "o") return toggleOverlay();
+  if (/^[0-9]$/.test(k)) { digits += k; return; }
+  if (k === "g") { digits = ""; return; }
+  if (k === "Enter" && digits) { select(parseInt(digits, 10)); digits = ""; return; }
+  digits = "";
+  if (k === "ArrowRight" || k === "j") { ev.preventDefault(); step(1); }
+  else if (k === "ArrowLeft" || k === "k") { ev.preventDefault(); step(-1); }
+  else if (k === "Home") select(S.events[0].i);
+  else if (k === "End") select(S.events[S.events.length - 1].i);
+  else if (k === "n") stepKind(1);
+  else if (k === "p") stepKind(-1);
+  else if (k === "r") setView("raw");
+  else if (k === "c") setView("context");
+  else if (k === "d") { setView("diff"); if (S.baseline === null) moveBaseline(0); }
+  else if (k === "l") { if (S.run && S.run.summary.has_chain) setView("chain"); }
+  else if (k === "t") setView("tree");
+  else if (k === "[") moveBaseline(-1);
+  else if (k === "]") moveBaseline(1);
+  else if (k === "y") navigator.clipboard && navigator.clipboard.writeText(currentCommand());
+});
+
+window.addEventListener("resize", drawTrack);
+window.addEventListener("popstate", function () {
+  var parts = location.pathname.split("/");
+  if (parts[1] === "run" && parts[2]) load(parts[2]);
+});
+
+$("themebtn").onclick = function () {
+  var now = document.documentElement.getAttribute("data-theme");
+  document.documentElement.setAttribute("data-theme", now === "dark" ? "light" : "dark");
+  try { localStorage.setItem("tape-theme", now === "dark" ? "light" : "dark"); } catch (e) {}
+};
+try {
+  var saved = localStorage.getItem("tape-theme");
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+} catch (e) {}
+
+/* Boot: open on the run being debugged, with the overlay available on Esc/o.
+   A debugger opens on the thing being debugged; a file-picker landing page is
+   a product pattern, not a profiler one. */
+api("/api/runs").then(function (d) {
+  S.runs = d.runs; S.tapeDir = d.tape_dir;
+  return api("/api/boot");
+}).then(function (b) {
+  var parts = location.pathname.split("/");
+  var id = (parts[1] === "run" && parts[2]) ? parts[2] : b.run_id;
+  if (!id) {
+    $("pane").appendChild(el("p", "muted", "No runs recorded yet. `tape run python agent.py`"));
+    toggleOverlay(true);
+    return;
+  }
+  if (parts[1] !== "run") history.replaceState({}, "", "/run/" + id);
+  load(id);
+  /* Bare `tape ui` opens the newest run with the overlay up, so discovery is
+     one keystroke away without being the landing page. */
+  if (!b.explicit && parts[1] !== "run") toggleOverlay(true);
+}).catch(function (e) {
+  $("pane").appendChild(el("p", "muted", String(e.message || e)));
+});
+</script>
+</body>
+</html>

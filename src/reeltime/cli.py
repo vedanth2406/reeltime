@@ -32,9 +32,11 @@ from .errors import TapeError
 #: Not yet built. Kept in step with the roadmap table in the README -- the two
 #: are the only places that promise anything, so they must not drift apart.
 #: Entries that are not subcommands say so in their name ("mcp adapter").
-PLANNED = (
-    ("ui", "browse a run in a local viewer", "M11"),
-)
+#:
+#: Empty as of M11: every verb the CLI has ever promised now exists. M12-M14 on
+#: the roadmap are benchmarks, a docs site, and two internal fixes -- none of
+#: them a subcommand, so none of them belongs here.
+PLANNED: tuple = ()
 
 
 # -- helpers -------------------------------------------------------------
@@ -654,6 +656,42 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 # -- tape reindex --------------------------------------------------------
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Serve the local viewer.
+
+    Opens on the run being debugged. A debugger opens on the thing you are
+    debugging; a file-picker landing page is a product pattern, not a profiler
+    one -- so bare `tape ui` opens the newest run with the runs overlay up,
+    which covers discovery without making it the default.
+    """
+    from .core import ui
+
+    tape_dir = _tape_dir(args)
+    explicit = bool(args.run)
+    try:
+        boot = _resolve_run(tape_dir, args.run).stem
+    except TapeError:
+        if explicit:
+            raise
+        boot = None            # an empty .tape/ still serves, and says so
+
+    def ready(url: str) -> None:
+        print("tape ui  →  {}".format(url), file=sys.stderr)
+        print("  {}  ·  {}".format(
+            paths.display_path(tape_dir),
+            "run {}".format(_short(boot)) if boot else "no runs yet"),
+            file=sys.stderr)
+        print("  loopback only; ? for keys, ctrl-c to stop", file=sys.stderr)
+        if not args.no_open:
+            import webbrowser
+
+            webbrowser.open(url + ("run/" + boot if boot else ""))
+
+    ui.serve(tape_dir, boot_run=boot, port=args.port, on_ready=ready,
+             boot_explicit=explicit)
+    return 0
+
+
 def cmd_reindex(args: argparse.Namespace) -> int:
     tape_dir = _tape_dir(args)
     path = _resolve_run(tape_dir, args.run)
@@ -829,8 +867,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tape",
         description="deterministic record/replay for LLM agents",
-        epilog="planned: " + ", ".join(
-            "{} ({})".format(name, milestone) for name, _, milestone in PLANNED),
+        # Empty once everything promised has shipped -- an epilog reading
+        # "planned:" with nothing after it is worse than no epilog.
+        epilog=("planned: " + ", ".join(
+            "{} ({})".format(name, milestone) for name, _, milestone in PLANNED))
+        if PLANNED else None,
     )
     parser.add_argument("-V", "--version", action="version",
                         version="reeltime {}".format(__version__))
@@ -913,6 +954,15 @@ def build_parser() -> argparse.ArgumentParser:
     fork.add_argument("--loose", action="store_true",
                       help="match the replayed prefix on content hash alone")
     fork.set_defaults(func=cmd_fork)
+
+    ui_cmd = sub.add_parser("ui", help="browse a run in a local viewer")
+    ui_cmd.add_argument("run", nargs="?",
+                        help="run id or prefix; omit for the most recent")
+    ui_cmd.add_argument("--port", type=int, default=7654,
+                        help="port on 127.0.0.1 (default: 7654)")
+    ui_cmd.add_argument("--no-open", action="store_true",
+                        help="do not open a browser")
+    ui_cmd.set_defaults(func=cmd_ui)
 
     ls = sub.add_parser("ls", help="list recorded runs, newest first")
     ls.add_argument("-n", "--limit", type=int, default=20)
