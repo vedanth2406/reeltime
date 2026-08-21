@@ -23,7 +23,7 @@ Q2 is wrong: invoice.pdf IS in the listing.
 Run:  tape show last 1 --context --diff 0
 
 note: mock provider, 2 events -- little latency to skip, so replay saves ~1s here.
-      examples/m3_replay_speed.py measures ~80x on an 8-turn agent at 400ms/call.
+      examples/m3_replay_speed.py measures ~60x on an 8-turn agent at 400ms/call.
 
 ✓ recorded 2 events → .tape/runs/01M0B3V68D0THT474YMFV0R2SQ.jsonl  (1.5s, <$0.0001)
 
@@ -61,7 +61,7 @@ The model was never wrong. `invoice.pdf` had been truncated out of its context
 one line before the question that asked about it.
 
 (That demo runs against an embedded mock, so it has almost no latency to skip
-and replay only saves about a second. The ~80× figure below is measured on
+and replay only saves about a second. The ~60× figure below is measured on
 [a realistic agent](examples/m3_replay_speed.py) paying 400 ms per call.)
 
 **The same bug in the viewer** — `tape ui`, local, keyboard-first, no accounts:
@@ -120,11 +120,11 @@ Nothing you can reproduce, so nothing you can fix — only re-roll and hope.
   it**, naming each source with the line of your code that produced it. It
   needs no traces and no replay, and `--fail-on-findings` turns it into a CI
   gate. See [above](#start-here-what-is-actually-nondeterministic-about-your-agent).
-- **Replay is instant, offline, and free.** $0.00 and zero network calls —
-  ~80× faster on an 8-turn agent paying 400 ms per call ([the
-  benchmark](examples/m3_replay_speed.py)), and the ratio grows with the
-  latency you were paying. That is what makes stepping and scrubbing possible
-  at all.
+- **Replay is instant, offline, and free.** $0.00 and zero network calls — 16
+  events replay in ~50 ms, which is **~60×** faster than the same agent paying
+  400 ms per call ([the benchmark](examples/m3_replay_speed.py)), and the ratio
+  is however much latency you were paying. That is what makes stepping and
+  scrubbing possible at all.
 - **Streaming is recorded and replayed chunk by chunk**, boundaries byte-exact,
   with `--realtime` to reinstate the recorded gaps. Every other tool in this
   space refuses streaming outright.
@@ -775,19 +775,77 @@ stream if a byte is out.
 
 ## Numbers
 
-Measured on the included benchmark (`python examples/m3_replay_speed.py`) — an
-8-turn agent with 400 ms of latency per call, on an M-series Mac:
+Measured, not estimated. `python examples/overhead.py` produces every figure
+below; `python examples/m3_replay_speed.py` produces the replay ratio. Median
+of 7 batches on an M-series Mac, Python 3.13, against a loopback mock — so the
+boundary itself is nearly free and the *absolute* overhead is not hidden inside
+network latency.
 
-| | wall clock | cost | network |
-|---|---|---|---|
-| record | 3.39 s | $0.0015 | 8 calls |
-| replay | **0.04 s** | **$0.00** | **none** |
+**Added per recorded boundary crossing:**
 
-- **~80× faster** replay, and the ratio grows with the latency you were paying.
-- **~2 ms** added per recorded HTTP event.
-- **20–30 µs** added per ambient read (`random`, `uuid`, clock).
-- **~184 bytes** per event on disk; payloads over 8 KB are content-addressed
-  into `.tape/blobs/` and deduplicate across turns.
+| Seam | Added per event |
+|---|---|
+| `httpx`, `httpx2`, `requests` | **~0.2 ms** |
+| `urllib3` (so `boto3`/Bedrock) | ~0.15 ms |
+| MCP `tools/call` | ~70 µs |
+| LangChain `chain` node | ~60 µs |
+| `@tape.tool` call | ~25 µs |
+| ambient read (`random`, `uuid`, clock) | **~15 µs** |
+
+Plus **~3 ms once per run** for `install()` and teardown — patching the shims
+and writing the header and footer. On a short run that fixed cost is most of
+what recording costs you.
+
+**On disk:** ~1.4 KB per LLM event with a 240-character prompt, ~230 bytes per
+ambient read. Payloads over 8 KB are content-addressed into `.tape/blobs/` and
+deduplicate across turns, so a long system prompt repeated over twenty turns is
+stored once.
+
+**Replay:** the 8-turn agent in `examples/m3_replay_speed.py` replays its 16
+events in **~50 ms**, and that figure barely moves with what the original calls
+cost — replay does no network I/O, so it is bounded by local work alone. At
+400 ms per call that is **~60× faster**; against a slower model, or an agent
+that paid for retries, the ratio is however much latency you were paying.
+
+<details>
+<summary>Why these are lower than the figures published before 1.0</summary>
+
+The pre-1.0 README quoted ~2 ms per HTTP event and 20–30 µs per ambient read.
+Those numbers predated MCP, `tape doctor`, LangChain and `urllib3`, and were
+never re-measured as seams were added — which is how a README ends up
+advertising Bedrock support next to figures taken before Bedrock existed.
+
+They were also derived unreliably. The per-event overhead was computed by
+differencing two single runs of a benchmark dominated by 3.2 s of simulated
+latency and dividing by the event count. Run four times, that method reports
+between 3.6 ms and 7.5 ms per event for identical work — it was measuring
+jitter. `examples/m3_replay_speed.py` no longer reports a per-event figure and
+says why; `examples/overhead.py` measures each seam directly, off versus on, as
+a median over repeated batches.
+
+</details>
+
+## Trace format stability
+
+**A trace is a portable artifact, and 1.0 makes that a commitment.** The format
+is JSONL with a `"v"` schema version that has been `1` since the first release
+and will not change inside 1.x; a bump would be a breaking change requiring a
+major version and a migration path, not a quiet increment. Readers ignore
+fields they do not recognise and keep events whose `kind` they have never heard
+of, so a trace written by a newer reeltime still opens in an older one — losing
+an event would be worse than failing to interpret it, because the count is what
+tells you the trace is complete. Enrichment runs the other way too: decoders are
+pure functions over recorded bytes, so a provider decoder written today reads a
+trace recorded a year ago, which is what `tape reindex` is built on. **Old
+traces always replay** — matching is by call site and content hash, neither of
+which is version-specific, and the one thing that will stop a replay is your
+*code* changing, which raises `TapeMiss` by design rather than drifting. The
+guarantee is tested rather than asserted:
+[`tests/test_trace_compat.py`](tests/test_trace_compat.py) runs against a trace
+recorded by **0.1.0**, checked in unmodified, and still finds the truncation bug
+in it. What is *not* promised: the exact bytes of enrichment fields (`tokens`,
+`cost_usd`) may improve as decoders and pricing data do, and `.tape/blobs/` is
+an implementation detail addressed by content hash rather than a stable layout.
 
 ## What this can't replay
 
@@ -962,6 +1020,13 @@ those needs no AWS account either.
 
 ## Roadmap
 
+**reeltime is 1.0 and feature-complete.** Everything the build spec set
+out to do is built and released. M13 and M14 below are two internal gaps —
+both recorded with the measurements behind them in
+[`STATUS.md`](STATUS.md), neither scheduled, and neither affecting anyone who
+is not forking a `requests`- or `urllib3`-recorded event.
+
+
 | M | Scope | Status |
 |---|---|---|
 | 1 | Trace format, blob store, recorder, ambient patches | ✅ |
@@ -975,9 +1040,14 @@ those needs no AWS account either.
 | 9 | LangChain adapter — `chain` events, graph diff, the aiohttp guard, **v0.5.0** | ✅ |
 | 10 | `urllib3` interception — Bedrock/boto3 record and replay | ✅ |
 | 11 | `tape ui` — a local viewer | ✅ |
-| 12 | Overhead benchmarks, docs site | **next** → v1.0 |
-| 13 | Fork patches at the `requests` and `urllib3` seams | after v1.0 |
-| 14 | Re-runnable Bedrock pricing check against the AWS Price List API | after v1.0 |
+| 12 | Overhead re-measured across every seam, **v1.0** | ✅ |
+| 13 | Fork patches at the `requests` and `urllib3` seams | open |
+| 14 | Re-runnable Bedrock pricing check against the AWS Price List API | open |
+
+**There is no docs site, and that is a decision.** For a tool this size the
+README is better: one page, searchable, versioned with the code, and rendered
+by both GitHub and PyPI. A docs site would add a build, a host, and a second
+place for a claim to go stale.
 
 MCP shipped early on purpose: no other record/replay tool captures MCP sessions,
 and a server that exposes a different tool set between runs is exactly the kind
@@ -990,7 +1060,7 @@ of thing that changes an agent's behaviour invisibly. See
 git clone https://github.com/vedanth2406/reeltime
 cd reeltime
 pip install -e ".[dev]"
-pytest                                  # 872 tests
+pytest                                  # 882 tests
 pytest --cov --cov-report=term-missing  # core/ is at 95%
 python examples/m3_replay_speed.py      # the benchmark above
 ```

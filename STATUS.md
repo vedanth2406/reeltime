@@ -1,6 +1,6 @@
 # Status
 
-Handoff notes, current as of **2026-08-21**. Written so a session starting cold
+Handoff notes, current as of **2026-08-21**, at **1.0.0**. Written so a session starting cold
 can pick up without re-deriving anything or re-litigating decisions that were
 already made for reasons.
 
@@ -14,10 +14,10 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 
 | | |
 |---|---|
-| Milestones done | M1–M11, including M5.5. There is no M8 — see the roadmap |
+| Milestones done | M1–M12, including M5.5. There is no M8 — see the roadmap |
 | Published | `0.1.1` … `0.6.0`, `0.7.0` — all on PyPI |
-| In the tree | `0.7.0` released and verified. **M12 is next, and is not yet scoped** |
-| Tests | 872 passing, 1 skipped, 7 deselected (the wheel gate), 95% on `core/` |
+| In the tree | **`1.0.0` — feature-complete.** M13 and M14 are open and unscheduled |
+| Tests | 882 passing, 1 skipped, 7 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
 | Tags | `v0.1.1` … `v0.6.0`, `v0.7.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
@@ -32,12 +32,17 @@ two departures from spec §10 (no web framework, no fork button) are decisions
 rather than omissions. There is no M8; that slot was emptied by the
 resequencing, not skipped.
 
-**M12 — benchmarks, a docs site, and the v1.0 cut — is deliberately not scoped
-yet.** It is the milestone that decides what v1.0 means, so it gets its own
-scoping pass rather than being rolled into. The README's overhead numbers
-(~2 ms per HTTP event, 20–30 µs per ambient read) predate M5.5, M7, M9, M10 and
-M11 and **must be re-measured, not re-quoted** — that is the first thing M12
-owes anybody.
+**M12 shipped as a reduced milestone and 1.0 is cut.** It re-measured the
+overhead across every seam that now exists, wrote the trace-format guarantee,
+and stopped there. **The docs site was declined rather than deferred** — for a
+tool this size the README is better, and a site is a second place for a claim
+to go stale.
+
+**reeltime is feature-complete.** Everything the build spec set out to do is
+built and released. The two remaining items are internal gaps, not features:
+[M13](#still-open-fork-patches-reach-only-the-httpx-seam--m13) and
+[M14](#follow-up-make-the-bedrock-rows-re-runnable--m14), both **open and
+unscheduled**, both written up with the measurements behind them.
 
 ### Two things to know before the next release
 
@@ -92,6 +97,7 @@ the tag matches the artifact before announcing it.
 | **5.5** | MCP adapter: `mcp` events, `tape.mcp.connect` over stdio and HTTP/SSE, `tape.mcp.wrap`, discovery recording, readable `tape show`, tool-set reporting in `tape diff`, `--patch mcp.<tool>.result=`, a mock-server example |
 | **7** | `tape doctor` — run a command N times, report each boundary where the runs disagreed with its call site and a suggestion, plus the path split. `--runs`, `--json`, `--fail-on-findings` |
 | **9** | LangChain adapter: `chain` events, `tape.langchain.install()` / `handler()`, `tape run --langchain`, node tree in `tape show`, graph-change reporting in `tape diff`, a version gate with a CI floor job, an example, and the `aiohttp` guard |
+| **12** | Overhead re-measured across every seam (`examples/overhead.py`), the trace-format stability guarantee and its 0.1.0-fixture tests, and the **1.0.0** release. The docs site was declined, not deferred |
 | **11** | `tape ui`: a stdlib `http.server` and one inlined HTML file, six screens (context + context diff with truncation called out, fork tree, divergence, chain tree, doctor by call site), keyboard-first scrubbing, loopback-only, read-only. Plus the CLI/UI drift tests and a node-based render check |
 | **10** | `urllib3` interception: `HTTPConnectionPool.urlopen` shim (record + replay, streaming chunk-exact), the Bedrock decoder across five model families with a binary event-stream parser, dummy-credential injection for replay, the `x-amz-security-token` redaction fix, a mock-Bedrock example, and the SigV4 patch decision below |
 | **—** | The patch-grammar audit: `tool.args` and `mcp.args` implemented, `http.url` fixed, `+=`/`~=` on a JSON document refused at parse time, the fork footer written to disk, and `tests/test_patch_effects.py` |
@@ -1012,11 +1018,11 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | 5.5 | **MCP adapter** | ✅ |
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
 | 9 | LangChain adapter, remaining framework coverage | ✅ |
-| 10 | `urllib3` interception — Bedrock/boto3, streaming included | ✅ unreleased |
-| 11 | Web UI | ✅ unreleased |
-| 12 | Overhead benchmarks, docs site → v1.0 | **next** |
-| 13 | Fork patches at the `requests` and `urllib3` seams | after v1.0 |
-| 14 | Re-runnable Bedrock pricing check against the Price List API | after v1.0 |
+| 10 | `urllib3` interception — Bedrock/boto3, streaming included | ✅ |
+| 11 | Web UI (`tape ui`) | ✅ |
+| 12 | Overhead re-measured across every seam, trace-format guarantee, **v1.0** | ✅ |
+| 13 | Fork patches at the `requests` and `urllib3` seams | **open, unscheduled** |
+| 14 | Re-runnable Bedrock pricing check against the Price List API | **open, unscheduled** |
 
 **There is no M8.** The original spec §11 had M8 = web UI. The resequencing
 after the competitive analysis moved the web UI to M10, which emptied the slot;
@@ -1054,19 +1060,18 @@ see "The framework audit" above for what else was considered and why it was
 not built. It was the last *adapter*-shaped milestone; M10 is transport-shaped,
 which is a different job.
 
-M14 is the pricing-refresh script under "Follow-up" above: small, self-contained,
-and it turns a manual re-verification into a command that fails.
+**M12 was cut down deliberately.** It re-measured the overhead across every
+seam and wrote the trace-format guarantee, and then 1.0 shipped. The docs site
+in the original plan was **declined, not deferred**: for a tool this size the
+README is better — one page, searchable, versioned with the code, rendered by
+both GitHub and PyPI — and a site would add a build, a host, and a second place
+for a claim to go stale.
 
-M13 is the fork-patch gap under "Still open" above — the grammar reaches only
-the httpx seam, and on `requests` that has been true since M2. It sits after
-v1.0 because it is a correctness gap in a feature that works everywhere people
-currently use it, not a hole in coverage; the signed-request half, which is the
-half M10 made reachable, is refused loudly rather than silent.
-
-M12 is what stands between here and v1.0: measure the recording overhead per
-boundary kind and publish a docs site. The README currently claims ~2 ms per
-HTTP event and 20–30 µs per ambient read — **those numbers predate M5.5 and M7
-and should be re-measured, not re-quoted.**
+**M13 and M14 are open and unscheduled**, and that is their status rather than
+a plan. Both are written up above with the measurements behind them: M13 under
+"Still open: fork patches reach only the httpx seam", M14 under "Follow-up:
+make the Bedrock rows re-runnable". Neither affects a user who is not forking a
+`requests`- or `urllib3`-recorded event.
 
 MCP was deliberately early, and it shipped: no record/replay tool captures MCP
 sessions, and AgentTape still publishes an `mcp` optional dependency with no

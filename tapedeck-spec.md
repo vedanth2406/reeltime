@@ -350,15 +350,17 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 | **9** | LangChain adapter, remaining framework coverage | Framework coverage ✅ |
 | **10** | `urllib3` interception — Bedrock/boto3, streaming included | Closes the last uncovered HTTP stack ✅ |
 | **11** | Web UI | `tape ui` ✅ |
-| **12** | Overhead benchmarks, docs site, examples dir | v1.0 ← next |
-| **13** | Fork patches at the `requests` and `urllib3` seams | The grammar means the same thing at every seam |
-| **14** | Re-runnable Bedrock pricing check | `pricing.py` verified by a command, not by reading |
+| **12** | Overhead re-measured per seam, trace-format guarantee | **v1.0 released** ✅ |
+| **13** | Fork patches at the `requests` and `urllib3` seams | open, unscheduled |
+| **14** | Re-runnable Bedrock pricing check | open, unscheduled |
 
 **Resequenced 2026-08-17 after the AgentTape analysis** (`COMPETITIVE.md`). Streaming capture moved from M9 into M2 and streaming replay into M3, because the closest competitor cannot record streams at all and most production agents use them. MCP moved from M9 to M5.5, because AgentTape ships an `mcp` extra with no code behind it and that lead will not last. The web UI moved from M8 to last, because a viewer is the most expensive thing in the plan and the least differentiating now that a competitor ships one — v1.0 no longer waits on it.
 
 **The numbering is not contiguous, and that is deliberate.** Moving the web UI out of M8 emptied that slot; nothing was deferred and nothing is missing. Every other milestone kept the number it already had rather than shuffling up one. **Do not backfill M8** — closing the gap once already made the vacancy look like skipped work, and cost a round of corrections to undo.
 
 *(Amended 2026-08-19, after M9.)* The web UI moved again, from M10 to M11, to make room for `urllib3` interception at M10 — the M9 framework audit found Bedrock/boto3 to be the largest uncovered stack, and it is worth more than a viewer. This time the later milestones **were** shuffled up, because the alternative was a second vacant slot, and one vacancy that has to be explained is enough. M8 is still vacant and still must not be backfilled.
+
+*(Amended 2026-08-21, M12: **shipped reduced, and 1.0 is cut.** M12 re-measured the recording overhead across every seam that exists now — the published figures predated MCP, `tape doctor`, LangChain and `urllib3`, so a README advertising Bedrock was quoting numbers taken before Bedrock existed — and added the trace-format stability guarantee, tested against a checked-in trace recorded by 0.1.0. **The docs site was declined rather than deferred**: for a tool this size the README is better, and a site adds a build, a host, and a second place for a claim to go stale. M13 and M14 are open and unscheduled; neither is a feature. reeltime is feature-complete at 1.0.)*
 
 M1–M4 is the minimum viable tool and is achievable in about a week of focused work. Everything after is what makes it worth starring.
 

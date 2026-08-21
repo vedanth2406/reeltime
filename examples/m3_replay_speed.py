@@ -5,6 +5,13 @@
 Simulates an agent whose LLM calls take a realistic amount of time, records it,
 then replays it and reports the ratio. Replay does no network I/O at all, so
 the saving is essentially the whole of the original run's latency.
+
+**This measures the replay ratio, not recording overhead.** The ratio is robust
+here because replay time is tiny and the recorded time is dominated by latency
+you actually paid. A per-event overhead figure derived from the same two runs
+is not robust -- the delta between them is jitter on a multi-second sleep -- so
+this script no longer reports one. `examples/overhead.py` measures that
+properly, per seam, as a median over repeated batches.
 """
 
 import json
@@ -101,9 +108,17 @@ def main():
             record_wall / replay_wall))
         print()
         print("  baseline (not recorded)  {:7.3f}s".format(baseline_wall))
-        print("  recording overhead       {:+.1f}ms total, {:.2f}ms per event".format(
-            (record_wall - baseline_wall) * 1000,
-            (record_wall - baseline_wall) / summary.events * 1000))
+        print("  recording overhead       {:+.1f}ms total over the whole run".format(
+            (record_wall - baseline_wall) * 1000))
+        print()
+        print("  This script deliberately does NOT divide that by the event")
+        print("  count. Both runs are dominated by {:.1f}s of simulated latency,".format(
+            LATENCY_S * TURNS))
+        print("  so the difference between two single runs is mostly jitter --")
+        print("  measured across four runs it ranged 58-119ms, which becomes")
+        print("  \"3.6ms/event\" or \"7.5ms/event\" depending on the weather.")
+        print("  For per-seam overhead measured properly, run:")
+        print("      python examples/overhead.py")
     finally:
         shutil.rmtree(tape_dir, ignore_errors=True)
 

@@ -3,6 +3,94 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-08-21
+
+**1.0.** Seven releases, four framework integrations, and 882 tests. The API,
+the CLI surface and the trace format are now covered by semantic versioning:
+breaking changes need a 2.0.
+
+Nothing is removed and nothing is renamed — if 0.7.0 worked, 1.0.0 works. What
+changes is the promise attached to it.
+
+### Trace format stability
+
+A trace is a portable artifact, and 1.0 makes that a commitment:
+
+- The schema version `"v"` has been `1` since the first release and **will not
+  change inside 1.x**. A bump would be a breaking change requiring a major
+  version and a migration path.
+- **Old traces always replay.** Matching is by call site and content hash,
+  neither of which is version-specific. The one thing that stops a replay is
+  your *code* changing, which raises `TapeMiss` by design.
+- Readers ignore unknown fields and keep events whose `kind` they do not
+  recognise, so a trace written by a newer reeltime still opens in an older
+  one. Losing an event would be worse than failing to interpret it.
+- Decoders are pure functions over recorded bytes, so a decoder written today
+  enriches a trace recorded a year ago — what `tape reindex` is built on.
+
+Tested rather than asserted: `tests/test_trace_compat.py` runs against a trace
+recorded by **0.1.0**, checked in unmodified, and still finds the truncation
+bug in it.
+
+Not promised: the exact bytes of enrichment fields (`tokens`, `cost_usd`) may
+improve as decoders and pricing data do, and `.tape/blobs/` is an
+implementation detail addressed by content hash.
+
+### Overhead, re-measured across every seam
+
+The figures published before 1.0 predated MCP, `tape doctor`, LangChain and
+`urllib3` — a README advertising Bedrock support was quoting numbers taken
+before Bedrock existed. Every seam is now measured by
+`examples/overhead.py`, as a median over repeated batches:
+
+| Seam | Added per event |
+|---|---|
+| `httpx`, `httpx2`, `requests` | ~0.2 ms |
+| `urllib3` (so `boto3`/Bedrock) | ~0.15 ms |
+| MCP `tools/call` | ~70 µs |
+| LangChain `chain` node | ~60 µs |
+| `@tape.tool` call | ~25 µs |
+| ambient read | ~15 µs |
+
+Plus ~3 ms once per run for `install()` and teardown. On disk: ~1.4 KB per LLM
+event with a 240-character prompt, ~230 bytes per ambient read.
+
+**The old ~2 ms per HTTP event was an order of magnitude too pessimistic**, and
+it was derived unreliably — by differencing two single runs of a benchmark
+dominated by 3.2 s of simulated latency and dividing by the event count. Run
+four times, that method reports between 3.6 ms and 7.5 ms per event for
+identical work. `examples/m3_replay_speed.py` no longer reports a per-event
+figure and explains why; it measures the replay ratio, which is robust.
+
+The replay ratio is restated honestly: 16 events replay in **~50 ms**, which is
+**~60×** against an agent paying 400 ms per call — the ratio is however much
+latency you were paying, not a property of reeltime.
+
+### Added
+
+- `examples/overhead.py` — per-seam overhead, trace size, startup cost and
+  replay ratio, as a median over repeated batches.
+- `tests/test_trace_compat.py` and a checked-in 0.1.0 trace fixture.
+
+### Changed
+
+- `Development Status` is now `5 - Production/Stable`.
+- The demo GIF was re-recorded so its transcript matches the measured ratio.
+
+### Known and unscheduled
+
+Two internal gaps, both recorded in `STATUS.md` with the measurements behind
+them. Neither affects a user who is not forking a `requests`- or
+`urllib3`-recorded event:
+
+- **M13** — fork patches reach only the httpx seam. Request-rewriting patches
+  are refused with a reason on AWS-signed events, but on an unsigned `urllib3`
+  or `requests` event they are still accepted and silently do nothing. The
+  `requests` half has been true since M2.
+- **M14** — the Bedrock pricing rows are hand-transcribed from the AWS Price
+  List API. A script that diffs them would turn a manual re-verification into
+  a command that exits non-zero.
+
 ## [0.7.0] — 2026-08-21
 
 **`tape ui` — a local viewer for the things nothing else can show.** M11.

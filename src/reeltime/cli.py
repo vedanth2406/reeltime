@@ -33,9 +33,14 @@ from .errors import TapeError
 #: are the only places that promise anything, so they must not drift apart.
 #: Entries that are not subcommands say so in their name ("mcp adapter").
 #:
-#: Empty as of M11: every verb the CLI has ever promised now exists. M12-M14 on
-#: the roadmap are benchmarks, a docs site, and two internal fixes -- none of
-#: them a subcommand, so none of them belongs here.
+#: **Empty, and staying that way.** reeltime is feature-complete at 1.0: every
+#: verb this CLI ever promised exists, so `--help` prints no `planned:` line at
+#: all rather than a label with nothing after it.
+#:
+#: M13 and M14 on the roadmap are open and unscheduled, and neither is a
+#: subcommand -- one is a fork-patch gap at the `requests`/`urllib3` seams, the
+#: other a pricing-refresh script. They belong in STATUS.md, not in a promise
+#: made to somebody typing `tape --help`.
 PLANNED: tuple = ()
 
 

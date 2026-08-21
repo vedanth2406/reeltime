@@ -29,7 +29,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-__version__ = "0.7.0"
+__version__ = "1.0.0"
 
 from . import langchain, mcp
 from .core.spans import span
