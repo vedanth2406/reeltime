@@ -14,10 +14,10 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 
 | | |
 |---|---|
-| Milestones done | M1–M10, including M5.5. There is no M8 — see the roadmap |
+| Milestones done | M1–M11, including M5.5. There is no M8 — see the roadmap |
 | Published | `0.1.1`, `0.2.0`, `0.3.0`, `0.3.1`, `0.4.0`, `0.5.0`, `0.6.0` — all on PyPI |
-| In the tree | `0.6.0` released and verified. **M11 (`tape ui`) in progress** — see [`ui-design.md`](ui-design.md) |
-| Tests | 833 passing, 7 deselected (the wheel gate), 95% on `core/` |
+| In the tree | `0.6.0` released; **M11 (`tape ui`) complete and unreleased** — see [`ui-design.md`](ui-design.md) |
+| Tests | 872 passing, 1 skipped, 7 deselected (the wheel gate), 95% on `core/` |
 | Repo | https://github.com/vedanth2406/reeltime |
 | Tags | `v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0`, `v0.6.0` — every release from `v0.3.0` on is checked against its published sdist at [`RELEASING.md`](RELEASING.md) step 6 |
 | Branches | `main`, plus `hotfix/0.3.1` — deliberately unmerged, see [`RELEASING.md`](RELEASING.md) |
@@ -26,9 +26,11 @@ release checklist is [`RELEASING.md`](RELEASING.md).
 printed `RELEASE VERIFIED`, and `pip install reeltime` gives 0.6.0. That
 shipped M10: `urllib3` interception, closing the Bedrock/boto3 gap.
 
-**M11 (`tape ui`) is now in progress.** The approved design is
-[`ui-design.md`](ui-design.md); read it before touching `core/ui/`. There is no
-M8; that slot was emptied by the resequencing, not skipped.
+**M11 (`tape ui`) is complete and unreleased.** The approved design is
+[`ui-design.md`](ui-design.md); read it before touching `core/ui/`, because the
+two departures from spec §10 (no web framework, no fork button) are decisions
+rather than omissions. There is no M8; that slot was emptied by the
+resequencing, not skipped.
 
 ### Two things to know before the next release
 
@@ -83,10 +85,14 @@ the tag matches the artifact before announcing it.
 | **5.5** | MCP adapter: `mcp` events, `tape.mcp.connect` over stdio and HTTP/SSE, `tape.mcp.wrap`, discovery recording, readable `tape show`, tool-set reporting in `tape diff`, `--patch mcp.<tool>.result=`, a mock-server example |
 | **7** | `tape doctor` — run a command N times, report each boundary where the runs disagreed with its call site and a suggestion, plus the path split. `--runs`, `--json`, `--fail-on-findings` |
 | **9** | LangChain adapter: `chain` events, `tape.langchain.install()` / `handler()`, `tape run --langchain`, node tree in `tape show`, graph-change reporting in `tape diff`, a version gate with a CI floor job, an example, and the `aiohttp` guard |
+| **11** | `tape ui`: a stdlib `http.server` and one inlined HTML file, six screens (context + context diff with truncation called out, fork tree, divergence, chain tree, doctor by call site), keyboard-first scrubbing, loopback-only, read-only. Plus the CLI/UI drift tests and a node-based render check |
 | **10** | `urllib3` interception: `HTTPConnectionPool.urlopen` shim (record + replay, streaming chunk-exact), the Bedrock decoder across five model families with a binary event-stream parser, dummy-credential injection for replay, the `x-amz-security-token` redaction fix, a mock-Bedrock example, and the SigV4 patch decision below |
 | **—** | The patch-grammar audit: `tool.args` and `mcp.args` implemented, `http.url` fixed, `+=`/`~=` on a JSON document refused at parse time, the fork footer written to disk, and `tests/test_patch_effects.py` |
 
-CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `show`.
+CLI verbs today: `run`, `replay`, `fork`, `diff`, `doctor`, `reindex`, `ls`, `show`, `ui`.
+**`PLANNED` in `cli.py` is now empty** — every verb this project ever promised
+exists, so the help text has no `planned:` epilog. There is a test pinning that
+the epilog appears if and only if something is planned.
 Event kinds today: `llm`, `http`, `tool`, `mcp`, `chain`, `rand`, `time`, `uuid`.
 
 ## Releases
@@ -994,8 +1000,8 @@ async with tape.mcp.connect("python", ["server.py"], server="files") as session:
 | 7 | `tape doctor` — run twice, report actual nondeterminism sources | ✅ |
 | 9 | LangChain adapter, remaining framework coverage | ✅ |
 | 10 | `urllib3` interception — Bedrock/boto3, streaming included | ✅ unreleased |
-| 11 | Web UI | **next** |
-| 12 | Overhead benchmarks, docs site → v1.0 | |
+| 11 | Web UI | ✅ unreleased |
+| 12 | Overhead benchmarks, docs site → v1.0 | **next** |
 | 13 | Fork patches at the `requests` and `urllib3` seams | after v1.0 |
 | 14 | Re-runnable Bedrock pricing check against the Price List API | after v1.0 |
 

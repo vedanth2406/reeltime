@@ -321,6 +321,8 @@ This is a standalone reason to install the tool even for someone who never uses 
 
 `tape ui` serves a local viewer at `localhost:7654`. FastAPI + a single-page frontend. Keep it plain: this is a debugger, not a product.
 
+*(Amended 2026-08-21, M11: built, with two deliberate departures. **No FastAPI** — `dependencies = []` is load-bearing and quoted in the README, so the server is `http.server` from the standard library and the frontend is one HTML file with inlined CSS and JS: no build step, no CDN, works offline. **No fork button** — forking executes the user's agent with live credentials and real cost, and a viewer is exactly where somebody clicks by accident; the UI makes forks legible and hands over the command instead. The scope is narrowed on purpose to what no other tool can render: context and context diff with truncation called out, the fork tree, the divergence point, the chain tree, and doctor findings by call site. See `ui-design.md`.)*
+
 - **Timeline** — horizontal event track, colored by kind, width proportional to duration. Click to inspect. Keyboard `←`/`→` to scrub.
 - **Inspector** — for an LLM event: full message array (collapsible per message), the completion, token counts, cost. For a tool event: args and result, pretty-printed.
 - **Context view** — the assembled prompt at that step, with a toggle to highlight what changed since the previous LLM call.
@@ -347,8 +349,8 @@ Each milestone ships something usable. **Publish to PyPI at M4, not at the end**
 | **7** | `tape doctor` | Nondeterminism detection ✅ |
 | **9** | LangChain adapter, remaining framework coverage | Framework coverage ✅ |
 | **10** | `urllib3` interception — Bedrock/boto3, streaming included | Closes the last uncovered HTTP stack ✅ |
-| **11** | Web UI | `tape ui` ← next |
-| **12** | Overhead benchmarks, docs site, examples dir | v1.0 |
+| **11** | Web UI | `tape ui` ✅ |
+| **12** | Overhead benchmarks, docs site, examples dir | v1.0 ← next |
 | **13** | Fork patches at the `requests` and `urllib3` seams | The grammar means the same thing at every seam |
 | **14** | Re-runnable Bedrock pricing check | `pricing.py` verified by a command, not by reading |
 

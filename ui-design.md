@@ -126,15 +126,38 @@ dashboard this is not.
 Where the arrow keys live. Three regions:
 
 **Timeline strip** (top, full width). One horizontal track. Each event is a
-block, x-position by `t_rel`, **width proportional to `dur_ms`**, colour by
-`kind` (`llm`, `http`, `tool`, `mcp`, `chain`, `rand`, `time`, `uuid`). The
-selected event is outlined, not animated. Ambient events (`rand`/`time`/`uuid`)
-are near-zero duration, so they render as 2px ticks on a sub-track rather than
-invisible slivers.
+block, x-position by `t_rel`, width proportional to `dur_ms` **over a hard 3px
+floor**, colour by `kind` (`llm`, `http`, `tool`, `mcp`, `chain`, `rand`,
+`time`, `uuid`). The selected event is outlined, not animated. Ambient events
+(`rand`/`time`/`uuid`) are near-zero duration, so they render as 2px ticks on a
+sub-track rather than invisible slivers.
 
-Above ~2,000 events the track buckets by time and a block becomes "n events" —
-scrubbing then steps bucket to bucket until you zoom. Traces that large are
-real: an agent in a loop reads the clock hundreds of times.
+> **Measured, and the measurement changed this design.** The first draft said
+> "width proportional to `dur_ms`" with bucketing above ~2,000 events. Both
+> numbers were wrong, and `tools/measure_timeline.py` is why we know:
+>
+> Pure proportional layout is unusable almost immediately. With a realistic
+> agent mix, **38% of blocks fall under 3px at only 50 events**, and the 10%
+> mark is crossed at **eleven** (median across ten seeds: 12). A 1 ms tool call
+> beside a 1400 ms model call gets 1/1400th of the width. The 2,000 figure was
+> off by two orders of magnitude in the wrong direction.
+>
+> With a 3px floor and a 2px gap, the strip instead saturates when there is no
+> room for another block at any width:
+>
+> ```
+> BUCKET_AT = strip_width / (FLOOR + GAP)      # 1200 / 5 = 240
+> ```
+>
+> so the threshold is **computed from the live width at draw time**, not
+> hardcoded — a wider window really does show more events. Beyond it, blocks
+> bucket and scrubbing steps bucket to bucket.
+>
+> A second finding worth carrying: **proportionality degrades well before
+> saturation.** At 200 events the widest block is only ~2× the narrowest though
+> the real durations differ by ~787×. The strip is a *map*, not a measurement —
+> which is why duration is also on the status bar, and why that is not
+> redundant.
 
 **Inspector** (centre). The selected event, in one of three modes:
 
@@ -388,14 +411,22 @@ already exists.
 
 ---
 
-## Open questions for review
+## Open questions — all three answered
 
-1. **Is the runs index worth a screen, or should `tape ui <run>` open straight
-   into the run view** with the index as an overlay on `Esc`? The second is more
-   debugger-like — you usually arrive knowing which run you want.
-2. **Doctor: read a `--json` report from a path, or re-run `analyse()` over
-   stored runs?** Doctor keeps its runs, so the second works with no new data
-   and no execution — but a report is a *pair* of runs, and the UI would have to
-   infer which. Leaning toward reading the JSON.
-3. **Bucketing threshold on the timeline.** 2,000 is a guess; it should be
-   measured against a real long agent run before it is fixed.
+1. ~~**Is the runs index worth a screen?**~~ **Answered: no.** `tape ui <run>`
+   opens straight into the run view and the index is an `Esc`/`o` overlay. A
+   debugger opens on the thing being debugged; a file-picker landing page is a
+   product pattern. Bare `tape ui` opens the newest run *with the overlay up*,
+   which covers discovery without making it the default.
+2. ~~**Doctor: cached report or re-run `analyse()`?**~~ **Answered: re-run.**
+   A cached report can show findings for code already fixed, and staleness in a
+   correctness tool is worse than a two-second wait. It also keeps the
+   same-function-as-the-CLI invariant clean, with no serialised intermediate to
+   drift. The "which runs" problem is solved by grouping on `argv`, since
+   `tape doctor` records N runs of one command — no new trace field, which this
+   milestone does not get to add.
+3. ~~**Bucketing threshold on the timeline.**~~ **Answered by measurement.**
+   It is `strip_width / 5`, computed at draw time (240 at 1200px), and the
+   proportional model needed a 3px floor to work at all — see the note under
+   "Run view". `tools/measure_timeline.py` holds the measurement; the constants
+   in `index.html` carry a comment pointing at it so nobody re-guesses.

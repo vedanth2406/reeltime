@@ -164,6 +164,7 @@ tape ls                      # what you have recorded
 tape replay <run>            # re-run it offline, free
 tape show <run> 14 --context # what the model actually read at step 14
 tape doctor python agent.py  # why is this run not reproducible?
+tape ui <run>                # scrub it in a local viewer
 
 tape run --langchain python agent.py   # LangChain/LangGraph structure too
 ```
@@ -692,6 +693,47 @@ The runs are kept, so `tape diff` and `tape show` work on them afterwards.
 Doctor is not free — it runs your agent for real, twice — and it says so before
 it starts.
 
+## The viewer
+
+```bash
+tape ui              # the newest run, with the runs overlay up
+tape ui 01M0BDK0     # straight into that run
+```
+
+Serves `127.0.0.1:7654`. **Local only** — no accounts, no telemetry, no
+external requests, and the page loads nothing remote, so it works offline. The
+bind address is not configurable, because a trace is redacted on a best-effort
+basis and "unreachable from the network" is doing real work there.
+
+It is a viewer for the things nothing else can show, not a dashboard. There are
+no cost charts or latency percentiles — LangSmith and Braintrust do that, with
+teams behind them. What is here instead:
+
+- **The context view and context diff**, with truncation called out. A message
+  that survived but lost most of itself gets its kept prefix and its dropped
+  tail as separate blocks — an inline diff of "the last 500 characters
+  vanished" is unreadable, and this is the bug the demo is built around.
+- **The fork tree**, with lineage, fork points, and each fork's patch
+  expressions.
+- **The divergence point** between two runs, before any per-field detail.
+- **The chain tree** for LangChain and LangGraph runs, with the HTTP and LLM
+  events nested inside the node they happened in.
+- **Doctor findings grouped by call site**, recomputed from stored runs.
+
+Keyboard-first: `←`/`→` scrub the timeline, `c` and `d` switch to context and
+context-diff, `[`/`]` move the diff baseline, `t` opens the fork tree, `o` the
+runs overlay, `y` copies the equivalent `tape …` command, `?` lists the rest.
+
+**Read-only, and it never runs your agent.** `tape fork` and `tape doctor` both
+execute your code with live credentials and real cost; a viewer is exactly
+where somebody clicks by accident. The UI shows you the command instead.
+
+Timeline blocks are proportional to duration over a 3px floor — without the
+floor a 1 ms tool call beside a 1400 ms model call is invisible, which measured
+out as 38% of blocks unreadable at only 50 events. Past roughly 240 blocks
+(computed from the window width) they bucket. Read exact durations off the
+status bar; the strip is a map.
+
 ## Why interception is at the transport layer
 
 On **2026-08-18** the OpenAI Python SDK (3.2.0) is built on `httpx2` 2.10, while
@@ -923,8 +965,8 @@ those needs no AWS account either.
 | 7 | `tape doctor` — find a run's nondeterminism sources, **v0.4.0** | ✅ |
 | 9 | LangChain adapter — `chain` events, graph diff, the aiohttp guard, **v0.5.0** | ✅ |
 | 10 | `urllib3` interception — Bedrock/boto3 record and replay | ✅ |
-| 11 | `tape ui` — a local viewer | **next** |
-| 12 | Overhead benchmarks, docs site | → v1.0 |
+| 11 | `tape ui` — a local viewer | ✅ |
+| 12 | Overhead benchmarks, docs site | **next** → v1.0 |
 | 13 | Fork patches at the `requests` and `urllib3` seams | after v1.0 |
 | 14 | Re-runnable Bedrock pricing check against the AWS Price List API | after v1.0 |
 

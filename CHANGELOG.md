@@ -3,6 +3,50 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+M11 — `tape ui`, a local viewer for the things nothing else can show.
+
+### Added
+
+- **`tape ui` serves a local viewer on `127.0.0.1:7654`.** Keyboard-first:
+  `←`/`→` scrub the timeline, `c` and `d` switch the inspector to the context
+  view and the context diff, `[`/`]` move the diff baseline, `t` opens the fork
+  tree, `o` the runs overlay, `y` copies the equivalent `tape …` command, `?`
+  lists the rest.
+
+  `tape ui <run>` opens on that run; bare `tape ui` opens the newest one with
+  the runs overlay up. A debugger opens on the thing being debugged.
+
+- **Six screens, chosen for what no other tool can render:** the context view
+  and context diff with truncation called out, the fork tree with lineage and
+  patch expressions, the divergence point between two runs, the chain tree for
+  LangChain/LangGraph runs with boundary events nested inside their node, and
+  doctor findings grouped by call site.
+
+  Deliberately *not* an observability dashboard — no cost charts, no latency
+  percentiles, no cross-run aggregates. Those are somebody else's product, and
+  a viewer for runs a tool cannot record is worth less than being able to
+  record them.
+
+### Notes
+
+- **No new runtime dependency.** `dependencies = []` still holds: the server is
+  `http.server` from the standard library and the frontend is one HTML file
+  with inlined CSS and JS. No build step, no CDN, and it works offline.
+- **Local only, and the bind is not configurable.** `127.0.0.1`, no auth, no
+  accounts, no telemetry, and the page loads nothing remote. Redaction is
+  best-effort pattern-matching, so "unreachable from the network" is doing real
+  work rather than being a default.
+- **Read-only, and it never runs your agent.** No fork button and no
+  run-doctor button: both execute your code with live credentials and real
+  cost, and a viewer is where somebody clicks by accident. The UI shows the
+  command instead.
+- **The viewer cannot drift from the CLI.** Every endpoint calls the same
+  `core` function `tape show`, `tape diff` and `tape doctor` call and
+  serialises the result; there are tests asserting the API payload equals what
+  those functions returned.
+
 ## [0.6.0] — 2026-08-21
 
 **Bedrock and `boto3` are recorded and replayed.** That is the release: M10
